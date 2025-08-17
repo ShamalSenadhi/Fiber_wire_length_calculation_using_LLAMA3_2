@@ -1,8 +1,9 @@
 streamlit
 torch>=2.0.0
-transformers>=4.45.0
+transformers>=4.40.0
 accelerate
-bitsandbytes
 Pillow
 regex
-huggingface_hub
+easyocr
+numpy
+opencv-python-headless
