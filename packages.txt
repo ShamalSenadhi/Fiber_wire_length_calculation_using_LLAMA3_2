@@ -1,2 +1,6 @@
 curl
 wget
+gnupg
+software-properties-common
+nvidia-cuda-toolkit
+nvidia-driver-470
