@@ -1,9 +1,9 @@
 import streamlit as st
-import ollama
 import re
 from PIL import Image
 import io
-import base64
+import torch
+from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 
 # Page configuration
 st.set_page_config(
@@ -46,31 +46,46 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
+@st.cache_resource
+def load_model():
+    """Load the LLaVA model and processor"""
+    try:
+        processor = LlavaNextProcessor.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf")
+        model = LlavaNextForConditionalGeneration.from_pretrained(
+            "llava-hf/llava-v1.6-mistral-7b-hf", 
+            torch_dtype=torch.float16, 
+            low_cpu_mem_usage=True
+        )
+        return processor, model
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
+        return None, None
+
+def extract_number_from_image(image, image_name, processor, model):
     """
-    Extract a number from image bytes using Ollama and a specified model.
+    Extract a number from image using LLaVA model.
     """
     try:
-        # Convert image bytes to base64 for Ollama
-        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        # Prepare the prompt
+        prompt = "USER: <image>\nExtract the handwritten number from this image that represents a fiber length measurement in meters. Only return the numerical value.\nASSISTANT:"
         
-        # Send a chat request to the Ollama model
-        response = ollama.chat(
-            model="llama3.2-vision:11b",
-            messages=[{
-                "role": "user",
-                "content": "Extract the handwritten number in meters from this image.",
-                "images": [image_base64]
-            }]
-        )
+        # Process the image and text
+        inputs = processor(prompt, image, return_tensors="pt")
         
-        # Extract the content of the model's response
-        content = response["message"]["content"]
-        st.write(f"**Raw model output for {image_name}:**")
-        st.write(content)
+        # Generate response
+        with torch.no_grad():
+            output = model.generate(**inputs, max_new_tokens=50, do_sample=False)
+        
+        # Decode the response
+        response = processor.decode(output[0], skip_special_tokens=True)
+        
+        # Extract the assistant's response
+        assistant_response = response.split("ASSISTANT:")[-1].strip()
+        
+        st.write(f"**AI Response for {image_name}:** {assistant_response}")
         
         # Use regular expression to find a numerical value
-        match = re.search(r'(\d+(?:\.\d+)?)(?:\s*m(?:eters?)?)?', content.lower())
+        match = re.search(r'(\d+(?:\.\d+)?)', assistant_response)
         if match:
             return float(match.group(1))
         else:
@@ -89,7 +104,7 @@ def main():
     with st.sidebar:
         st.header("ℹ️ About")
         st.write("""
-        This app uses Ollama's LLaMA 3.2 Vision model to:
+        This app uses LLaVA (Large Language and Vision Assistant) to:
         - Extract handwritten numbers from images
         - Calculate the difference between fiber lengths
         - Display results with visualizations
@@ -97,70 +112,28 @@ def main():
         
         st.header("📋 Instructions")
         st.write("""
-        1. Upload exactly 2 images containing handwritten fiber lengths
-        2. Click 'Analyze Images' to process
-        3. View extracted numbers and calculated difference
+        1. Wait for the model to load (first time may take a few minutes)
+        2. Upload exactly 2 images containing handwritten fiber lengths
+        3. Click 'Analyze Images' to process
+        4. View extracted numbers and calculated difference
         """)
         
-        st.header("⚙️ Requirements")
+        st.header("🤖 Model Info")
         st.write("""
-        - Ollama server running locally
-        - llama3.2-vision:11b model installed
-        - Clear handwritten numbers in images
+        - **Model**: LLaVA-v1.6-Mistral-7B
+        - **Type**: Vision-Language Model
+        - **Provider**: Hugging Face Transformers
         """)
 
-    # Check Ollama connection
-    try:
-        models = ollama.list()
-        model_names = [model["name"] for model in models["models"]]
-        if "llama3.2-vision:11b" not in model_names:
-            st.error("❌ llama3.2-vision:11b model not found.")
-            st.markdown("""
-            **To fix this, run these commands:**
-            ```bash
-            ollama pull llama3.2-vision:11b
-            ```
-            """)
-            return
-        else:
-            st.success("✅ Ollama connection established and LLaMA 3.2 Vision model ready")
-    except Exception as e:
-        st.error("❌ Cannot connect to Ollama server")
-        st.markdown("""
-        **To fix this issue, follow these steps:**
-        
-        **Step 1: Install Ollama (if not installed)**
-        ```bash
-        # For Linux/macOS
-        curl -fsSL https://ollama.com/install.sh | sh
-        
-        # For Windows - Download from https://ollama.com/download
-        ```
-        
-        **Step 2: Start Ollama server**
-        ```bash
-        ollama serve
-        ```
-        
-        **Step 3: Pull the LLaMA 3.2 Vision model**
-        ```bash
-        ollama pull llama3.2-vision:11b
-        ```
-        
-        **Step 4: Refresh this page**
-        
-        ---
-        
-        **For Google Colab users:**
-        ```python
-        # Run these in Colab cells:
-        !curl -fsSL https://ollama.com/install.sh | sh
-        !nohup ollama serve > /dev/null 2>&1 &
-        import time; time.sleep(10)  # Wait for server to start
-        !ollama pull llama3.2-vision:11b
-        ```
-        """)
+    # Load model
+    with st.spinner("🤖 Loading AI model... (This may take a few minutes on first run)"):
+        processor, model = load_model()
+    
+    if processor is None or model is None:
+        st.error("❌ Failed to load the AI model. Please refresh the page and try again.")
         return
+    else:
+        st.success("✅ LLaVA model loaded successfully!")
 
     # File upload section
     st.markdown('<div class="upload-section">', unsafe_allow_html=True)
@@ -183,33 +156,30 @@ def main():
             
             with col1:
                 st.write(f"**Image 1:** {uploaded_files[0].name}")
-                image1 = Image.open(uploaded_files[0])
+                image1 = Image.open(uploaded_files[0]).convert("RGB")
                 st.image(image1, caption=uploaded_files[0].name, use_column_width=True)
                 
             with col2:
                 st.write(f"**Image 2:** {uploaded_files[1].name}")
-                image2 = Image.open(uploaded_files[1])
+                image2 = Image.open(uploaded_files[1]).convert("RGB")
                 st.image(image2, caption=uploaded_files[1].name, use_column_width=True)
 
             # Analysis button
             if st.button("🔍 Analyze Images", type="primary", use_container_width=True):
-                with st.spinner("🤖 Processing images with LLaMA 3.2 Vision..."):
-                    # Process images
-                    image1_bytes = uploaded_files[0].getvalue()
-                    image2_bytes = uploaded_files[1].getvalue()
+                with st.spinner("🤖 Processing images with LLaVA..."):
                     
                     # Extract numbers
-                    st.subheader("🧠 LLaMA 3.2 Vision Analysis Results")
+                    st.subheader("🧠 LLaVA Analysis Results")
                     
                     col1, col2 = st.columns(2)
                     
                     with col1:
                         st.write("**Processing Image 1...**")
-                        num1 = extract_number_from_image_bytes(image1_bytes, uploaded_files[0].name)
+                        num1 = extract_number_from_image(image1, uploaded_files[0].name, processor, model)
                         
                     with col2:
                         st.write("**Processing Image 2...**")
-                        num2 = extract_number_from_image_bytes(image2_bytes, uploaded_files[1].name)
+                        num2 = extract_number_from_image(image2, uploaded_files[1].name, processor, model)
                     
                     # Calculate and display results
                     st.subheader("📊 Results")
@@ -239,22 +209,6 @@ def main():
                         </div>
                         ''', unsafe_allow_html=True)
                         
-                        # Display uploaded images (resized)
-                        st.subheader("📸 Processed Images")
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.write(f"**{uploaded_files[0].name}** - {num1}m")
-                            image1_resized = image1.copy()
-                            image1_resized.thumbnail((300, 300))
-                            st.image(image1_resized)
-                            
-                        with col2:
-                            st.write(f"**{uploaded_files[1].name}** - {num2}m")
-                            image2_resized = image2.copy()
-                            image2_resized.thumbnail((300, 300))
-                            st.image(image2_resized)
-                        
                     else:
                         st.markdown('''
                         <div class="error-card">
@@ -264,7 +218,6 @@ def main():
                                 <li>Numbers are clearly handwritten and legible</li>
                                 <li>Images have good contrast and lighting</li>
                                 <li>Numbers are visible and not obscured</li>
-                                <li>Ollama server is running properly</li>
                             </ul>
                         </div>
                         ''', unsafe_allow_html=True)
@@ -272,7 +225,7 @@ def main():
     # Footer
     st.markdown("---")
     st.markdown(
-        "<div style='text-align: center; color: #7F8C8D;'>Powered by Ollama LLaMA 3.2 Vision | Built with Streamlit</div>",
+        "<div style='text-align: center; color: #7F8C8D;'>Powered by LLaVA-v1.6-Mistral-7B | Built with Streamlit</div>",
         unsafe_allow_html=True
     )
 
