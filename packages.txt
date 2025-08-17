@@ -1,5 +1,5 @@
 curl
-nvidia
+
 cuda
-toolkit
+
 procps
