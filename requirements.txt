@@ -1,1 +1,70 @@
+# Core Streamlit and Web Framework
+streamlit>=1.28.0
+streamlit-option-menu>=0.3.6
+streamlit-lottie>=0.0.5
+streamlit-aggrid>=0.3.4
 
+# AI and ML Libraries
+ollama>=0.1.7
+transformers>=4.35.0
+torch>=2.1.0
+torchvision>=0.16.0
+
+# Image Processing and Computer Vision
+Pillow>=10.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Data Processing and Analysis
+pandas>=2.1.0
+plotly>=5.17.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# Utilities and File Handling
+python-dotenv>=1.0.0
+pathlib>=1.0.1
+io
+base64
+json
+re
+os
+tempfile
+datetime
+logging
+typing
+
+# Database and Storage (Optional)
+sqlite3
+pymongo>=4.5.0
+
+# API and Network
+requests>=2.31.0
+httpx>=0.25.0
+
+# UI Enhancement Libraries
+streamlit-extras>=0.3.0
+streamlit-card>=0.0.4
+streamlit-toggle-switch>=1.0.2
+streamlit-cropper>=0.2.1
+
+# Progress and Loading
+stqdm>=0.0.5
+tqdm>=4.66.0
+
+# Export and Reporting
+fpdf2>=2.7.0
+reportlab>=4.0.0
+openpyxl>=3.1.0
+
+# Validation and Quality Assurance
+pydantic>=2.4.0
+validators>=0.22.0
+
+# Logging and Monitoring
+loguru>=0.7.0
+psutil>=5.9.0
+
+# Configuration Management
+pyyaml>=6.0.1
+configparser>=5.3.0
