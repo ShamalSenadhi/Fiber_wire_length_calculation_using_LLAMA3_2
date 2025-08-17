@@ -1,9 +1,6 @@
-tesseract-ocr
-tesseract-ocr-eng
-tesseract-ocr-all
-libgl1-mesa-glx
-libglib2.0-0
-libsm6
-libxext6
-libxrender-dev
-libgomp1
+streamlit==1.29.0
+opencv-python==4.8.1.78
+pillow==10.1.0
+pytesseract==0.3.10
+pandas==2.1.4
+numpy==1.26.2
