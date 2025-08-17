@@ -1,2 +1,5 @@
 curl
 wget
+nvidia-cuda-toolkit
+nvidia-driver-470
+ollama
