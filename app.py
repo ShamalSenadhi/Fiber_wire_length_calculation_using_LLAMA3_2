@@ -5,44 +5,37 @@ import io
 from PIL import Image
 import base64
 
-# Configure Streamlit page
+# Set page configuration
 st.set_page_config(
     page_title="Fiber Wire Length Calculator",
     page_icon="📏",
     layout="wide"
 )
 
-# Title and description
-st.title("📏 Fiber Wire Length Calculator")
-st.markdown("**Using LLAMA3 Vision Model to extract handwritten fiber lengths from images**")
+st.title("🔬 Fiber Wire Length Calculator using LLaMA3 Vision")
+st.markdown("Upload handwritten fiber length images to extract measurements and calculate differences")
 
-# Function to extract number from image using Ollama
 def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
     """
-    Extract handwritten number from image using LLAMA3 vision model
+    Extract a number from image bytes using Ollama LLaMA3 vision model.
     """
     try:
-        # Convert image bytes to base64 for Ollama
-        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-        
-        # Send chat request to Ollama model
+        # Convert PIL image to base64 for Ollama
         response = ollama.chat(
             model='llama3.2-vision:11b',
             messages=[{
                 'role': 'user',
-                'content': 'Extract the handwritten number in meters from this image. Only return the numerical value.',
-                'images': [image_b64]
+                'content': 'Extract the handwritten number in meters from this image. Return only the numerical value.',
+                'images': [image_bytes]
             }]
         )
         
-        # Extract content from response
         content = response['message']['content']
         st.write(f"**Raw model output for {image_name}:**")
-        st.code(content)
+        st.write(content)
         
         # Use regex to find numerical value
         match = re.search(r'(\d+(?:\.\d+)?)(?:\s*m|meters)?', content.lower())
-        
         if match:
             return float(match.group(1))
         else:
@@ -53,191 +46,166 @@ def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
         st.error(f"Error processing {image_name}: {str(e)}")
         return None
 
-# Function to display image with resize
-def display_resized_image(image_bytes, image_name, max_width=300, max_height=300):
+def display_image_with_resize(image, max_width=300, max_height=300):
     """
-    Display resized image in Streamlit
+    Display image with resizing
     """
-    try:
-        image = Image.open(io.BytesIO(image_bytes))
-        image.thumbnail((max_width, max_height))
-        return image
-    except Exception as e:
-        st.error(f"Could not display image {image_name}: {e}")
-        return None
+    image_copy = image.copy()
+    image_copy.thumbnail((max_width, max_height))
+    return image_copy
 
-# Main application logic
 def main():
-    st.sidebar.header("Instructions")
-    st.sidebar.markdown("""
-    1. Upload exactly two images containing handwritten fiber lengths
-    2. The LLAMA3 vision model will extract the numerical values
-    3. The application will calculate the difference between the two lengths
-    4. Repeat for additional image pairs
-    """)
+    # Initialize session state
+    if 'processed_first_pair' not in st.session_state:
+        st.session_state.processed_first_pair = False
+    if 'first_pair_results' not in st.session_state:
+        st.session_state.first_pair_results = {}
+
+    # Sidebar for model configuration
+    st.sidebar.header("⚙️ Configuration")
     
-    # Check if Ollama is available
+    # Check if Ollama is running
     try:
         models = ollama.list()
-        # Handle different response formats
-        if isinstance(models, dict) and 'models' in models:
-            model_names = [model['name'] for model in models['models']]
-        else:
-            model_names = [model.get('name', '') for model in models] if isinstance(models, list) else []
+        available_models = [model['name'] for model in models['models'] if 'vision' in model['name']]
         
-        if 'llama3.2-vision:11b' not in model_names:
-            st.warning("⚠️ LLAMA3.2 Vision model not found in available models:")
-            st.code(model_names if model_names else "No models found")
-            st.info("Please install it using: `ollama pull llama3.2-vision:11b`")
-            st.info("Or try a different model that supports vision, such as 'llava' or 'llama3.2-vision'")
-            # Don't return here - let user proceed anyway
-        else:
-            st.success("✅ LLAMA3.2 Vision model is available")
+        if not available_models:
+            st.sidebar.error("No vision models found. Please install llama3.2-vision:11b")
+            st.stop()
+        
+        selected_model = st.sidebar.selectbox(
+            "Select Vision Model:",
+            available_models,
+            index=0 if 'llama3.2-vision:11b' in available_models else 0
+        )
+        
     except Exception as e:
-        st.error(f"❌ Ollama connection failed: {str(e)}")
-        st.info("Make sure Ollama is running locally. Start it with: `ollama serve`")
-        st.info("If you're on Streamlit Cloud, you'll need to host Ollama separately.")
-        # Don't return here - show the interface anyway for debugging
+        st.sidebar.error(f"Ollama not running or not accessible: {str(e)}")
+        st.sidebar.info("Please make sure Ollama is installed and running with the llama3.2-vision:11b model")
+        st.stop()
+
+    # Main content area
+    col1, col2 = st.columns(2)
     
-    # First set of images
-    st.header("First Image Pair")
-    uploaded_files_1 = st.file_uploader(
-        "Upload first two images containing handwritten fiber lengths",
-        type=['png', 'jpg', 'jpeg'],
-        accept_multiple_files=True,
-        key="first_pair"
-    )
-    
-    if uploaded_files_1:
-        if len(uploaded_files_1) != 2:
-            st.warning("Please upload exactly two image files.")
-        else:
-            st.success(f"Uploaded {len(uploaded_files_1)} files")
-            
-            # Display uploaded images
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader(f"Image 1: {uploaded_files_1[0].name}")
-                image1 = display_resized_image(uploaded_files_1[0].getvalue(), uploaded_files_1[0].name)
-                if image1:
-                    st.image(image1)
-            
-            with col2:
-                st.subheader(f"Image 2: {uploaded_files_1[1].name}")
-                image2 = display_resized_image(uploaded_files_1[1].getvalue(), uploaded_files_1[1].name)
-                if image2:
-                    st.image(image2)
-            
-            # Process images button
-            if st.button("Process First Image Pair", key="process_1"):
-                with st.spinner("Processing images with LLAMA3 model..."):
-                    # Extract numbers from both images
-                    num1 = extract_number_from_image_bytes(
-                        uploaded_files_1[0].getvalue(), 
-                        uploaded_files_1[0].name
-                    )
-                    num2 = extract_number_from_image_bytes(
-                        uploaded_files_1[1].getvalue(), 
-                        uploaded_files_1[1].name
-                    )
+    with col1:
+        st.header("📤 First Image Pair")
+        uploaded_files_1 = st.file_uploader(
+            "Upload first two images",
+            type=['png', 'jpg', 'jpeg'],
+            accept_multiple_files=True,
+            key="first_pair"
+        )
+        
+        if uploaded_files_1 and len(uploaded_files_1) == 2:
+            if st.button("Process First Pair", key="process_first"):
+                with st.spinner("Processing first image pair..."):
+                    results = {}
                     
-                    # Calculate difference
-                    if num1 is not None and num2 is not None:
-                        diff = abs(num1 - num2)
+                    for uploaded_file in uploaded_files_1:
+                        # Display image
+                        image = Image.open(uploaded_file)
+                        st.image(display_image_with_resize(image), 
+                                caption=uploaded_file.name, use_column_width=True)
                         
-                        st.success("✅ Processing completed!")
+                        # Convert to bytes for Ollama
+                        img_buffer = io.BytesIO()
+                        image.save(img_buffer, format='PNG')
+                        img_bytes = img_buffer.getvalue()
                         
-                        # Display results
-                        results_col1, results_col2, results_col3 = st.columns(3)
-                        
-                        with results_col1:
-                            st.metric("Length 1", f"{num1} meters")
-                        
-                        with results_col2:
-                            st.metric("Length 2", f"{num2} meters")
-                        
-                        with results_col3:
-                            st.metric("Difference", f"{diff} meters", delta=f"±{diff}")
-                        
-                        st.balloons()
-                    else:
-                        st.error("❌ Could not calculate difference due to missing number(s).")
-    
-    st.divider()
-    
-    # Second set of images
-    st.header("Second Image Pair")
-    uploaded_files_2 = st.file_uploader(
-        "Upload next two images containing handwritten fiber lengths",
-        type=['png', 'jpg', 'jpeg'],
-        accept_multiple_files=True,
-        key="second_pair"
-    )
-    
-    if uploaded_files_2:
-        if len(uploaded_files_2) != 2:
-            st.warning("Please upload exactly two image files.")
-        else:
-            st.success(f"Uploaded {len(uploaded_files_2)} files")
-            
-            # Display uploaded images
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader(f"Image 3: {uploaded_files_2[0].name}")
-                image3 = display_resized_image(uploaded_files_2[0].getvalue(), uploaded_files_2[0].name)
-                if image3:
-                    st.image(image3)
-            
-            with col2:
-                st.subheader(f"Image 4: {uploaded_files_2[1].name}")
-                image4 = display_resized_image(uploaded_files_2[1].getvalue(), uploaded_files_2[1].name)
-                if image4:
-                    st.image(image4)
-            
-            # Process images button
-            if st.button("Process Second Image Pair", key="process_2"):
-                with st.spinner("Processing images with LLAMA3 model..."):
-                    # Extract numbers from both images
-                    num3 = extract_number_from_image_bytes(
-                        uploaded_files_2[0].getvalue(), 
-                        uploaded_files_2[0].name
-                    )
-                    num4 = extract_number_from_image_bytes(
-                        uploaded_files_2[1].getvalue(), 
-                        uploaded_files_2[1].name
-                    )
+                        # Extract number
+                        length = extract_number_from_image_bytes(img_bytes, uploaded_file.name)
+                        if length is not None:
+                            results[uploaded_file.name] = length
                     
-                    # Calculate difference
-                    if num3 is not None and num4 is not None:
-                        diff2 = abs(num3 - num4)
+                    # Store results and calculate difference
+                    st.session_state.first_pair_results = results
+                    st.session_state.processed_first_pair = True
+                    
+                    if len(results) == 2:
+                        lengths = list(results.values())
+                        difference = abs(lengths[0] - lengths[1])
                         
-                        st.success("✅ Processing completed!")
-                        
-                        # Display results
-                        results_col1, results_col2, results_col3 = st.columns(3)
-                        
-                        with results_col1:
-                            st.metric("Length 3", f"{num3} meters")
-                        
-                        with results_col2:
-                            st.metric("Length 4", f"{num4} meters")
-                        
-                        with results_col3:
-                            st.metric("Difference", f"{diff2} meters", delta=f"±{diff2}")
-                        
-                        st.balloons()
+                        st.success("✅ First Pair Results:")
+                        for name, length in results.items():
+                            st.write(f"**{name}:** {length} meters")
+                        st.write(f"**Difference:** {difference} meters")
                     else:
-                        st.error("❌ Could not calculate difference due to missing number(s).")
-    
-    # Footer
-    st.divider()
+                        st.error("Could not extract numbers from both images")
+                        
+        elif uploaded_files_1 and len(uploaded_files_1) != 2:
+            st.warning("Please upload exactly 2 images for the first pair")
+
+    with col2:
+        st.header("📤 Second Image Pair")
+        uploaded_files_2 = st.file_uploader(
+            "Upload second two images",
+            type=['png', 'jpg', 'jpeg'],
+            accept_multiple_files=True,
+            key="second_pair"
+        )
+        
+        if uploaded_files_2 and len(uploaded_files_2) == 2:
+            if st.button("Process Second Pair", key="process_second"):
+                with st.spinner("Processing second image pair..."):
+                    results = {}
+                    
+                    for uploaded_file in uploaded_files_2:
+                        # Display image
+                        image = Image.open(uploaded_file)
+                        st.image(display_image_with_resize(image), 
+                                caption=uploaded_file.name, use_column_width=True)
+                        
+                        # Convert to bytes for Ollama
+                        img_buffer = io.BytesIO()
+                        image.save(img_buffer, format='PNG')
+                        img_bytes = img_buffer.getvalue()
+                        
+                        # Extract number
+                        length = extract_number_from_image_bytes(img_bytes, uploaded_file.name)
+                        if length is not None:
+                            results[uploaded_file.name] = length
+                    
+                    if len(results) == 2:
+                        lengths = list(results.values())
+                        difference = abs(lengths[0] - lengths[1])
+                        
+                        st.success("✅ Second Pair Results:")
+                        for name, length in results.items():
+                            st.write(f"**{name}:** {length} meters")
+                        st.write(f"**Difference:** {difference} meters")
+                    else:
+                        st.error("Could not extract numbers from both images")
+                        
+        elif uploaded_files_2 and len(uploaded_files_2) != 2:
+            st.warning("Please upload exactly 2 images for the second pair")
+
+    # Summary section
+    if st.session_state.processed_first_pair:
+        st.header("📊 Summary")
+        st.write("**First Pair Results:**")
+        for name, length in st.session_state.first_pair_results.items():
+            st.write(f"- {name}: {length} meters")
+        
+        if len(st.session_state.first_pair_results) == 2:
+            lengths = list(st.session_state.first_pair_results.values())
+            difference = abs(lengths[0] - lengths[1])
+            st.write(f"- **Difference:** {difference} meters")
+
+    # Instructions
     st.markdown("---")
-    st.markdown(
-        "**Fiber Wire Length Calculator** | Powered by LLAMA3 Vision Model & Streamlit",
-        unsafe_allow_html=True
-    )
+    st.markdown("""
+    ### 📋 Instructions:
+    1. **Install Requirements**: Make sure you have all required packages installed
+    2. **Start Ollama**: Ensure Ollama is running with the LLaMA3 vision model
+    3. **Upload Images**: Upload exactly 2 images for each pair
+    4. **Process**: Click the process button to extract fiber lengths
+    5. **Review Results**: Check the extracted measurements and differences
+    
+    ### 🔧 Model Requirements:
+    - LLaMA3.2 Vision model (11B parameters)
+    - Ollama server running locally
+    - GPU support for faster processing
+    """)
 
 if __name__ == "__main__":
     main()
