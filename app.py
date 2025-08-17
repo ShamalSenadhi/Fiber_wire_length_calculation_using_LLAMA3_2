@@ -1,81 +1,92 @@
 import streamlit as st
 import torch
-from transformers import MllamaForConditionalGeneration, AutoProcessor
+from transformers import AutoProcessor, LlavaForConditionalGeneration
 from PIL import Image
 import re
 import gc
 
 @st.cache_resource
 def load_model():
-    """Load the Llama 3.2 Vision model with GPU support"""
+    """Load an open-source vision model with GPU support"""
     try:
         # Check if CUDA is available
         device = "cuda" if torch.cuda.is_available() else "cpu"
         st.info(f"Using device: {device}")
         
-        model_id = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+        # Use LLaVA model (open source, no gating)
+        model_id = "llava-hf/llava-1.5-7b-hf"
         
         # Load model with GPU support
-        model = MllamaForConditionalGeneration.from_pretrained(
+        model = LlavaForConditionalGeneration.from_pretrained(
             model_id,
-            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
             device_map="auto" if device == "cuda" else None,
-            trust_remote_code=True
+            low_cpu_mem_usage=True
         )
         
-        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(model_id)
         
-        st.success(f"✅ Llama 3.2 Vision model loaded successfully on {device}!")
+        st.success(f"✅ LLaVA-1.5 Vision model loaded successfully on {device}!")
         return model, processor, device
         
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
-        st.info("You may need to request access to the Llama models on Hugging Face")
-        return None, None, None
+        # Fallback to smaller model
+        try:
+            st.info("Trying smaller model...")
+            model_id = "microsoft/kosmos-2-patch14-224"
+            from transformers import AutoModel
+            model = AutoModel.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                device_map="auto" if device == "cuda" else None,
+            )
+            processor = AutoProcessor.from_pretrained(model_id)
+            st.success(f"✅ Kosmos-2 model loaded on {device}!")
+            return model, processor, device
+        except Exception as e2:
+            st.error(f"Fallback model also failed: {str(e2)}")
+            return None, None, None
 
-def extract_number_from_image(image, image_name, model, processor, device):
-    """Extract number from image using Llama 3.2 Vision"""
+def extract_number_from_image_llava(image, image_name, model, processor, device):
+    """Extract number from image using LLaVA"""
     try:
-        # Prepare the prompt
-        messages = [
+        # Prepare the conversation
+        conversation = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": "Extract the handwritten number in meters from this image. Return only the numerical value."}
+                    {"type": "text", "text": "What handwritten number do you see in this image? Just return the number value only."}
                 ]
             }
         ]
         
-        # Process the input
-        input_text = processor.apply_chat_template(messages, add_generation_prompt=True)
-        inputs = processor(
-            image,
-            input_text,
-            add_special_tokens=False,
-            return_tensors="pt"
-        )
+        # Apply chat template
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+        
+        # Process inputs
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
         
         # Move to GPU if available
         if device == "cuda":
-            inputs = inputs.to(device)
+            inputs = {k: v.to(device) for k, v in inputs.items()}
         
         # Generate response
         with torch.inference_mode():
-            output = model.generate(
-                **inputs,
-                max_new_tokens=50,
+            generate_ids = model.generate(
+                **inputs, 
+                max_new_tokens=30,
                 do_sample=False,
-                temperature=0.1,
-                pad_token_id=processor.tokenizer.eos_token_id
+                temperature=0.1
             )
         
-        # Decode the response
-        generated_text = processor.decode(output[0], skip_special_tokens=True)
-        
-        # Extract just the generated part (remove the input prompt)
-        prompt_length = len(input_text)
-        response = generated_text[prompt_length:].strip()
+        # Decode response
+        response = processor.batch_decode(
+            generate_ids[:, inputs['input_ids'].shape[1]:], 
+            skip_special_tokens=True, 
+            clean_up_tokenization_spaces=False
+        )[0]
         
         st.write(f"Model response for {image_name}: {response}")
         
@@ -96,42 +107,74 @@ def extract_number_from_image(image, image_name, model, processor, device):
             torch.cuda.empty_cache()
             gc.collect()
 
+def extract_number_simple_ocr(image, image_name):
+    """Fallback OCR method using easyocr"""
+    try:
+        import easyocr
+        reader = easyocr.Reader(['en'])
+        
+        # Convert PIL to numpy array
+        import numpy as np
+        img_array = np.array(image)
+        
+        # Extract text
+        results = reader.readtext(img_array)
+        
+        # Look for numbers
+        for (bbox, text, confidence) in results:
+            if confidence > 0.5:  # Only high confidence results
+                match = re.search(r'(\d+(?:\.\d+)?)', text)
+                if match:
+                    number = float(match.group(1))
+                    st.write(f"OCR found in {image_name}: {text} (confidence: {confidence:.2f})")
+                    return number
+        
+        st.warning(f"No numbers found via OCR in {image_name}")
+        return None
+        
+    except ImportError:
+        st.error("EasyOCR not available. Install with: pip install easyocr")
+        return None
+    except Exception as e:
+        st.error(f"OCR error for {image_name}: {str(e)}")
+        return None
+
 def main():
     st.title("🔢 Fiber Length Difference Calculator")
-    st.markdown("*Powered by Llama 3.2 Vision with GPU acceleration*")
+    st.markdown("*Powered by Open-Source Vision AI*")
     
-    # Load model
-    if 'model_loaded' not in st.session_state:
-        with st.spinner("Loading Llama 3.2 Vision model... This may take a few minutes."):
-            model, processor, device = load_model()
-            if model is not None:
-                st.session_state.model = model
-                st.session_state.processor = processor
-                st.session_state.device = device
-                st.session_state.model_loaded = True
-            else:
-                st.session_state.model_loaded = False
+    # Model selection
+    method = st.radio(
+        "Choose processing method:",
+        ["Vision AI (LLaVA)", "OCR (EasyOCR)"],
+        help="Vision AI is more accurate but requires more resources. OCR is faster but may be less accurate."
+    )
     
-    if not st.session_state.model_loaded:
-        st.error("❌ Model failed to load. Please check your setup.")
-        st.markdown("""
-        ### Requirements:
-        1. **GPU with sufficient VRAM** (recommended: 12GB+ for 11B model)
-        2. **Hugging Face access** to Llama models
-        3. **HF Token** in secrets: `HF_TOKEN`
+    # Load model only if using Vision AI
+    if method == "Vision AI (LLaVA)":
+        if 'model_loaded' not in st.session_state:
+            with st.spinner("Loading LLaVA Vision model... This may take a few minutes."):
+                model, processor, device = load_model()
+                if model is not None:
+                    st.session_state.model = model
+                    st.session_state.processor = processor
+                    st.session_state.device = device
+                    st.session_state.model_loaded = True
+                else:
+                    st.session_state.model_loaded = False
         
-        ### Setup Instructions:
-        1. Request access to Llama models at: https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct
-        2. Add your HF token to Streamlit secrets
-        3. Deploy on a GPU-enabled platform
-        """)
-        return
+        if not st.session_state.model_loaded:
+            st.error("❌ Vision model failed to load.")
+            method = "OCR (EasyOCR)"  # Fallback
+            st.info("Falling back to OCR method...")
     
     # GPU info
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and method == "Vision AI (LLaVA)":
         gpu_name = torch.cuda.get_device_name(0)
         gpu_memory = torch.cuda.get_device_properties(0).total_memory // 1024**3
         st.success(f"🚀 Running on: {gpu_name} ({gpu_memory}GB VRAM)")
+    elif method == "Vision AI (LLaVA)":
+        st.info("🖥️ Running on CPU (slower but works)")
     
     st.markdown("---")
     st.write("Upload two images with handwritten fiber lengths to calculate the difference")
@@ -159,21 +202,26 @@ def main():
                 st.subheader(f"Image {i+1}")
                 st.image(image, width=300)
         
-        if st.button("🔍 Extract Numbers & Calculate Difference", type="primary"):
-            with st.spinner("Processing images with Llama 3.2 Vision..."):
+        if st.button(f"🔍 Extract Numbers using {method}", type="primary"):
+            with st.spinner(f"Processing images with {method}..."):
                 progress_bar = st.progress(0)
                 
                 # Extract numbers from both images
                 results = []
                 for i, (image, uploaded_file) in enumerate(zip(images, uploaded_files)):
                     progress_bar.progress((i + 1) * 40)
-                    num = extract_number_from_image(
-                        image, 
-                        uploaded_file.name, 
-                        st.session_state.model,
-                        st.session_state.processor,
-                        st.session_state.device
-                    )
+                    
+                    if method == "Vision AI (LLaVA)" and st.session_state.get('model_loaded'):
+                        num = extract_number_from_image_llava(
+                            image, 
+                            uploaded_file.name, 
+                            st.session_state.model,
+                            st.session_state.processor,
+                            st.session_state.device
+                        )
+                    else:
+                        num = extract_number_simple_ocr(image, uploaded_file.name)
+                    
                     results.append(num)
                 
                 progress_bar.progress(100)
@@ -196,7 +244,7 @@ def main():
                     st.balloons()
                 else:
                     st.error("❌ Could not extract numbers from one or both images.")
-                    st.info("Make sure the numbers are clearly visible and handwritten.")
+                    st.info("Try the other processing method or ensure numbers are clearly visible.")
     
     elif uploaded_files and len(uploaded_files) != 2:
         st.warning(f"⚠️ Please upload exactly 2 images. You uploaded {len(uploaded_files)} image(s).")
@@ -207,12 +255,16 @@ def main():
         # Add example section
         with st.expander("ℹ️ How it works"):
             st.markdown("""
-            1. **Upload** two images containing handwritten numbers
-            2. **AI Analysis** using Llama 3.2 Vision model
-            3. **Extract** numerical values from both images  
-            4. **Calculate** the absolute difference
+            **Vision AI Mode:**
+            - Uses LLaVA-1.5 model (7B parameters)
+            - Better understanding of context
+            - Works with GPU acceleration
             
-            **Supported formats:** PNG, JPG, JPEG
+            **OCR Mode:**  
+            - Uses EasyOCR for text detection
+            - Faster processing
+            - Good for clear text
+            
             **Best results:** Clear, well-lit handwritten numbers
             """)
 
