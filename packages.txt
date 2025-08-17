@@ -1,6 +1,3 @@
-ollama
 curl
 wget
-cuda
-driver
-
+build-essential
