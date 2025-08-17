@@ -1,6 +1,2 @@
-libjpeg-dev
-libpng-dev
-libtiff-dev
-libwebp-dev
 curl
 wget
