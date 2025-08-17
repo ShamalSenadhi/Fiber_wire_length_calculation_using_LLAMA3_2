@@ -5,10 +5,6 @@ from PIL import Image
 import io
 import base64
 
-ollama serve  # Run in separate terminal
-ollama pull llama3.2-vision:11b
-
-
 # Page configuration
 st.set_page_config(
     page_title="Fiber Length Analyzer",
@@ -60,16 +56,16 @@ def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
         
         # Send a chat request to the Ollama model
         response = ollama.chat(
-            model='llama3.2-vision:11b',
+            model="llama3.2-vision:11b",
             messages=[{
-                'role': 'user',
-                'content': 'Extract the handwritten number in meters from this image.',
-                'images': [image_base64]
+                "role": "user",
+                "content": "Extract the handwritten number in meters from this image.",
+                "images": [image_base64]
             }]
         )
         
         # Extract the content of the model's response
-        content = response['message']['content']
+        content = response["message"]["content"]
         st.write(f"**Raw model output for {image_name}:**")
         st.write(content)
         
@@ -116,15 +112,54 @@ def main():
     # Check Ollama connection
     try:
         models = ollama.list()
-        model_names = [model['name'] for model in models['models']]
-        if 'llama3.2-vision:11b' not in model_names:
-            st.error("❌ llama3.2-vision:11b model not found. Please install it using: `ollama pull llama3.2-vision:11b`")
+        model_names = [model["name"] for model in models["models"]]
+        if "llama3.2-vision:11b" not in model_names:
+            st.error("❌ llama3.2-vision:11b model not found.")
+            st.markdown("""
+            **To fix this, run these commands:**
+            ```bash
+            ollama pull llama3.2-vision:11b
+            ```
+            """)
             return
         else:
             st.success("✅ Ollama connection established and LLaMA 3.2 Vision model ready")
     except Exception as e:
-        st.error(f"❌ Cannot connect to Ollama server: {str(e)}")
-        st.info("Please ensure Ollama is running locally with: `ollama serve`")
+        st.error("❌ Cannot connect to Ollama server")
+        st.markdown("""
+        **To fix this issue, follow these steps:**
+        
+        **Step 1: Install Ollama (if not installed)**
+        ```bash
+        # For Linux/macOS
+        curl -fsSL https://ollama.com/install.sh | sh
+        
+        # For Windows - Download from https://ollama.com/download
+        ```
+        
+        **Step 2: Start Ollama server**
+        ```bash
+        ollama serve
+        ```
+        
+        **Step 3: Pull the LLaMA 3.2 Vision model**
+        ```bash
+        ollama pull llama3.2-vision:11b
+        ```
+        
+        **Step 4: Refresh this page**
+        
+        ---
+        
+        **For Google Colab users:**
+        ```python
+        # Run these in Colab cells:
+        !curl -fsSL https://ollama.com/install.sh | sh
+        !nohup ollama serve > /dev/null 2>&1 &
+        import time; time.sleep(10)  # Wait for server to start
+        !ollama pull llama3.2-vision:11b
+        ```
+        """)
         return
 
     # File upload section
