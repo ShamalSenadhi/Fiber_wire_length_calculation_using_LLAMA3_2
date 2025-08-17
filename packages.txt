@@ -1,15 +1,6 @@
-# System packages required for the application
-# These will be installed by the deployment platform
-
-# Image processing libraries
 libjpeg-dev
 libpng-dev
 libtiff-dev
 libwebp-dev
-
-# System utilities
 curl
 wget
-
-# Note: Ollama server needs to be running separately on the host system
-# This application connects to a locally running Ollama instance
