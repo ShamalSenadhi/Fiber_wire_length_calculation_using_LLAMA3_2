@@ -1,4 +1,5 @@
 curl
-nvidia-cuda-toolkit
-nvidia-driver-535
+nvidia
+cuda-toolkit
+driver-535
 procps
