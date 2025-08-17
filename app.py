@@ -1,4 +1,3 @@
-    
 import streamlit as st
 import ollama
 import re
@@ -9,7 +8,7 @@ import base64
 # Configure Streamlit page
 st.set_page_config(
     page_title="Fiber Wire Length Calculator",
-    page_icon="🔌",
+    page_icon="📏",
     layout="wide"
 )
 
@@ -80,16 +79,25 @@ def main():
     # Check if Ollama is available
     try:
         models = ollama.list()
-        model_names = [model['name'] for model in models['models']]
+        # Handle different response formats
+        if isinstance(models, dict) and 'models' in models:
+            model_names = [model['name'] for model in models['models']]
+        else:
+            model_names = [model.get('name', '') for model in models] if isinstance(models, list) else []
+        
         if 'llama3.2-vision:11b' not in model_names:
-            st.error("❌ LLAMA3.2 Vision model not found. Please install it using: `ollama pull llama3.2-vision:11b`")
-            return
+            st.warning("⚠️ LLAMA3.2 Vision model not found in available models:")
+            st.code(model_names if model_names else "No models found")
+            st.info("Please install it using: `ollama pull llama3.2-vision:11b`")
+            st.info("Or try a different model that supports vision, such as 'llava' or 'llama3.2-vision'")
+            # Don't return here - let user proceed anyway
         else:
             st.success("✅ LLAMA3.2 Vision model is available")
     except Exception as e:
         st.error(f"❌ Ollama connection failed: {str(e)}")
         st.info("Make sure Ollama is running locally. Start it with: `ollama serve`")
-        return
+        st.info("If you're on Streamlit Cloud, you'll need to host Ollama separately.")
+        # Don't return here - show the interface anyway for debugging
     
     # First set of images
     st.header("First Image Pair")
