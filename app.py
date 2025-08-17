@@ -1,237 +1,186 @@
 import streamlit as st
 import ollama
 import re
-import io
-import os
 from PIL import Image
-import subprocess
+import io
 import time
-import threading
-import requests
 
-# Page configuration
+# Configure Streamlit page
 st.set_page_config(
-    page_title="Fiber Wire Length Calculator",
+    page_title="Fiber Length Analyzer",
     page_icon="📏",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Initialize session state
-if 'ollama_running' not in st.session_state:
-    st.session_state.ollama_running = False
-if 'model_pulled' not in st.session_state:
-    st.session_state.model_pulled = False
+# Title and description
+st.title("📏 Handwritten Fiber Length Analyzer")
+st.markdown("""
+This application uses Ollama's llama3.2-vision:11b model to extract handwritten fiber lengths from images 
+and calculate the difference between two measurements.
+""")
 
-def check_ollama_running():
-    """Check if Ollama service is running"""
-    try:
-        response = requests.get("http://localhost:11434/api/version", timeout=5)
-        return response.status_code == 200
-    except:
-        return False
+# Sidebar for configuration
+st.sidebar.header("Configuration")
+model_name = st.sidebar.selectbox(
+    "Select Model",
+    ["llama3.2-vision:11b", "llava:latest", "bakllava:latest"],
+    index=0
+)
 
-def start_ollama():
-    """Start Ollama service in background"""
+# Check if Ollama is running
+@st.cache_data
+def check_ollama_connection():
     try:
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(3)  # Wait for service to start
-        return True
+        response = ollama.list()
+        return True, "Connected to Ollama successfully"
     except Exception as e:
-        st.error(f"Failed to start Ollama: {e}")
-        return False
+        return False, f"Failed to connect to Ollama: {str(e)}"
 
-def pull_model():
-    """Pull the LLAMA3.2 vision model"""
+# Function to extract number from image
+def extract_number_from_image(image_bytes, model=model_name):
+    """Extract handwritten number from image using Ollama vision model"""
     try:
-        result = subprocess.run(
-            ["ollama", "pull", "llama3.2-vision:11b"], 
-            capture_output=True, 
-            text=True, 
-            timeout=600
-        )
-        return result.returncode == 0
-    except Exception as e:
-        st.error(f"Failed to pull model: {e}")
-        return False
-
-def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
-    """Extract a number from image bytes using Ollama and LLAMA3.2 vision model"""
-    try:
-        response = ollama.chat(
-            model='llama3.2-vision:11b',
-            messages=[{
-                'role': 'user',
-                'content': 'Extract the handwritten number in meters from this image. Only return the numerical value.',
-                'images': [image_bytes]
-            }]
-        )
+        with st.spinner("Analyzing image..."):
+            response = ollama.chat(
+                model=model,
+                messages=[{
+                    'role': 'user',
+                    'content': 'Extract the handwritten number in meters from this image. Only return the numerical value.',
+                    'images': [image_bytes]
+                }]
+            )
         
         content = response['message']['content']
-        st.write(f"**Raw model output for {image_name}:**")
-        st.write(content)
+        st.write(f"**Raw model output:** {content}")
         
-        # Use regular expression to find a numerical value
-        match = re.search(r'(\d+(?:\.\d+)?)(?:\s*m|meters)?', content.lower())
+        # Use regex to find numerical value
+        match = re.search(r'(\d+(?:\.\d+)?)(?:\s*m(?:eters?)?)?', content.lower())
         if match:
             return float(match.group(1))
         else:
-            st.warning(f"No number found in {image_name}")
+            st.warning("No numerical value found in the response")
             return None
             
     except Exception as e:
-        st.error(f"Error processing {image_name}: {e}")
+        st.error(f"Error processing image: {str(e)}")
         return None
 
-def main():
-    st.title("📏 Fiber Wire Length Calculator")
-    st.markdown("### Using LLAMA3.2 Vision Model with GPU Support")
-    
-    # Sidebar for model management
-    with st.sidebar:
-        st.header("🔧 Model Setup")
-        
-        # Check Ollama status
-        if st.button("Check Ollama Status"):
-            if check_ollama_running():
-                st.success("✅ Ollama is running")
-                st.session_state.ollama_running = True
-            else:
-                st.error("❌ Ollama is not running")
-                st.session_state.ollama_running = False
-        
-        # Start Ollama
-        if st.button("Start Ollama Service"):
-            with st.spinner("Starting Ollama..."):
-                if start_ollama():
-                    st.success("✅ Ollama started successfully")
-                    st.session_state.ollama_running = True
-                else:
-                    st.error("❌ Failed to start Ollama")
-        
-        # Pull model
-        if st.button("Pull LLAMA3.2 Vision Model"):
-            if not st.session_state.ollama_running:
-                st.error("Please start Ollama service first")
-            else:
-                with st.spinner("Pulling model... This may take several minutes"):
-                    if pull_model():
-                        st.success("✅ Model pulled successfully")
-                        st.session_state.model_pulled = True
-                    else:
-                        st.error("❌ Failed to pull model")
-        
-        # Status indicators
-        st.markdown("---")
-        st.markdown("**Status:**")
-        if st.session_state.ollama_running:
-            st.success("🟢 Ollama Running")
-        else:
-            st.error("🔴 Ollama Stopped")
-            
-        if st.session_state.model_pulled:
-            st.success("🟢 Model Ready")
-        else:
-            st.warning("🟡 Model Not Loaded")
-    
-    # Main application
-    if not st.session_state.ollama_running:
-        st.warning("⚠️ Please start Ollama service from the sidebar first")
-        st.stop()
-    
-    if not st.session_state.model_pulled:
-        st.warning("⚠️ Please pull the LLAMA3.2 vision model from the sidebar first")
-        st.stop()
-    
-    # File upload section
-    st.markdown("## 📤 Upload Fiber Length Images")
-    
-    tab1, tab2 = st.tabs(["First Pair", "Second Pair"])
-    
-    with tab1:
-        st.markdown("### Upload First Two Images")
-        uploaded_files_1 = st.file_uploader(
-            "Choose first two images", 
-            accept_multiple_files=True, 
-            type=['png', 'jpg', 'jpeg'],
-            key="first_pair"
-        )
-        
-        if uploaded_files_1 and len(uploaded_files_1) == 2:
-            col1, col2 = st.columns(2)
-            
-            extracted_lengths_1 = {}
-            
-            for i, uploaded_file in enumerate(uploaded_files_1):
-                with col1 if i == 0 else col2:
-                    st.image(uploaded_file, caption=uploaded_file.name, width=300)
-                    
-                    if st.button(f"Process {uploaded_file.name}", key=f"process1_{i}"):
-                        with st.spinner(f"Processing {uploaded_file.name}..."):
-                            image_bytes = uploaded_file.read()
-                            length = extract_number_from_image_bytes(image_bytes, uploaded_file.name)
-                            if length is not None:
-                                extracted_lengths_1[uploaded_file.name] = length
-                                st.success(f"Extracted length: {length} meters")
-            
-            # Calculate difference for first pair
-            if len(extracted_lengths_1) == 2:
-                lengths = list(extracted_lengths_1.values())
-                difference = abs(lengths[0] - lengths[1])
-                st.markdown("---")
-                st.success(f"**Fiber length difference (First Pair): {difference} meters**")
-        
-        elif uploaded_files_1 and len(uploaded_files_1) != 2:
-            st.error("Please upload exactly 2 images")
-    
-    with tab2:
-        st.markdown("### Upload Second Two Images")
-        uploaded_files_2 = st.file_uploader(
-            "Choose second two images", 
-            accept_multiple_files=True, 
-            type=['png', 'jpg', 'jpeg'],
-            key="second_pair"
-        )
-        
-        if uploaded_files_2 and len(uploaded_files_2) == 2:
-            col1, col2 = st.columns(2)
-            
-            extracted_lengths_2 = {}
-            
-            for i, uploaded_file in enumerate(uploaded_files_2):
-                with col1 if i == 0 else col2:
-                    st.image(uploaded_file, caption=uploaded_file.name, width=300)
-                    
-                    if st.button(f"Process {uploaded_file.name}", key=f"process2_{i}"):
-                        with st.spinner(f"Processing {uploaded_file.name}..."):
-                            image_bytes = uploaded_file.read()
-                            length = extract_number_from_image_bytes(image_bytes, uploaded_file.name)
-                            if length is not None:
-                                extracted_lengths_2[uploaded_file.name] = length
-                                st.success(f"Extracted length: {length} meters")
-            
-            # Calculate difference for second pair
-            if len(extracted_lengths_2) == 2:
-                lengths = list(extracted_lengths_2.values())
-                difference = abs(lengths[0] - lengths[1])
-                st.markdown("---")
-                st.success(f"**Fiber length difference (Second Pair): {difference} meters**")
-        
-        elif uploaded_files_2 and len(uploaded_files_2) != 2:
-            st.error("Please upload exactly 2 images")
-    
-    # Instructions
-    with st.expander("📖 Instructions"):
-        st.markdown("""
-        1. **Setup**: First, start Ollama service and pull the LLAMA3.2 vision model from the sidebar
-        2. **Upload**: Upload exactly 2 images per tab containing handwritten fiber lengths
-        3. **Process**: Click the process button for each image to extract the length
-        4. **Results**: The app will calculate and display the difference between the two lengths
-        
-        **Requirements:**
-        - Images should contain handwritten numbers representing fiber lengths in meters
-        - Supported formats: PNG, JPG, JPEG
-        - GPU acceleration will be used automatically if available
-        """)
+# Check Ollama connection status
+connection_status, connection_msg = check_ollama_connection()
+if connection_status:
+    st.sidebar.success(connection_msg)
+else:
+    st.sidebar.error(connection_msg)
+    st.error("Please ensure Ollama is running and the model is available.")
+    st.stop()
 
-if __name__ == "__main__":
-    main()
+# Main interface
+col1, col2 = st.columns(2)
+
+with col1:
+    st.header("📸 Image 1")
+    uploaded_file1 = st.file_uploader(
+        "Upload first fiber length image",
+        type=['png', 'jpg', 'jpeg'],
+        key="image1"
+    )
+    
+    if uploaded_file1:
+        image1 = Image.open(uploaded_file1)
+        st.image(image1, caption="First Image", use_column_width=True)
+
+with col2:
+    st.header("📸 Image 2")
+    uploaded_file2 = st.file_uploader(
+        "Upload second fiber length image",
+        type=['png', 'jpg', 'jpeg'],
+        key="image2"
+    )
+    
+    if uploaded_file2:
+        image2 = Image.open(uploaded_file2)
+        st.image(image2, caption="Second Image", use_column_width=True)
+
+# Process images when both are uploaded
+if uploaded_file1 and uploaded_file2:
+    if st.button("🔍 Analyze Images", type="primary"):
+        st.header("📊 Analysis Results")
+        
+        # Create progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Process first image
+        status_text.text("Processing first image...")
+        progress_bar.progress(25)
+        image1_bytes = uploaded_file1.getvalue()
+        num1 = extract_number_from_image(image1_bytes, model_name)
+        
+        # Process second image
+        status_text.text("Processing second image...")
+        progress_bar.progress(75)
+        image2_bytes = uploaded_file2.getvalue()
+        num2 = extract_number_from_image(image2_bytes, model_name)
+        
+        # Complete processing
+        progress_bar.progress(100)
+        status_text.text("Analysis complete!")
+        
+        # Display results
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if num1 is not None:
+                st.metric("Image 1 Length", f"{num1} m")
+            else:
+                st.error("Could not extract value from Image 1")
+        
+        with col2:
+            if num2 is not None:
+                st.metric("Image 2 Length", f"{num2} m")
+            else:
+                st.error("Could not extract value from Image 2")
+        
+        with col3:
+            if num1 is not None and num2 is not None:
+                difference = abs(num1 - num2)
+                st.metric("Difference", f"{difference} m")
+                
+                # Additional analysis
+                st.subheader("📈 Analysis Summary")
+                larger_value = max(num1, num2)
+                smaller_value = min(num1, num2)
+                percentage_diff = (difference / larger_value) * 100 if larger_value > 0 else 0
+                
+                st.write(f"**Larger value:** {larger_value} m")
+                st.write(f"**Smaller value:** {smaller_value} m")
+                st.write(f"**Percentage difference:** {percentage_diff:.2f}%")
+                
+                if percentage_diff < 5:
+                    st.success("✅ Values are very close (< 5% difference)")
+                elif percentage_diff < 15:
+                    st.warning("⚠️ Moderate difference (5-15%)")
+                else:
+                    st.error("❌ Significant difference (> 15%)")
+            else:
+                st.error("Cannot calculate difference due to missing values")
+
+# Instructions section
+st.sidebar.header("📋 Instructions")
+st.sidebar.markdown("""
+1. **Start Ollama**: Ensure Ollama service is running
+2. **Model Ready**: Verify llama3.2-vision:11b is available
+3. **Upload Images**: Upload two images with handwritten fiber lengths
+4. **Analyze**: Click the analyze button to process both images
+5. **View Results**: See extracted values and calculated difference
+
+**Supported formats:** PNG, JPG, JPEG
+""")
+
+# Footer
+st.markdown("---")
+st.markdown(
+    "Built with ❤️ using Streamlit and Ollama | "
+    "Model: llama3.2-vision:11b"
+)
