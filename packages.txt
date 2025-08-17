@@ -1,10 +1,15 @@
-libgl1-mesa-glx
-libglib2.0-0
-libsm6
-libxext6
-libxrender-dev
-libgomp1
-libgthread-2.0-dev
-ffmpeg
-libopencv-dev
-python3-opencv
+# System packages required for the application
+# These will be installed by the deployment platform
+
+# Image processing libraries
+libjpeg-dev
+libpng-dev
+libtiff-dev
+libwebp-dev
+
+# System utilities
+curl
+wget
+
+# Note: Ollama server needs to be running separately on the host system
+# This application connects to a locally running Ollama instance
