@@ -1,185 +1,220 @@
 import streamlit as st
-import ollama
-import re
+import torch
+from transformers import MllamaForConditionalGeneration, AutoProcessor
 from PIL import Image
-import io
-import subprocess
-import os
-import time
+import re
+import gc
 
-def setup_ollama():
-    """Setup Ollama service and model"""
+@st.cache_resource
+def load_model():
+    """Load the Llama 3.2 Vision model with GPU support"""
     try:
-        # Install Ollama if not present using direct curl | sh method
-        if not os.path.exists('/usr/local/bin/ollama') and not os.path.exists('/usr/bin/ollama'):
-            st.info("Installing Ollama... This may take a few minutes.")
-            # Use shell=True to properly execute the curl | sh command
-            result = subprocess.run('curl -fsSL https://ollama.ai/install.sh | sh', 
-                                  shell=True, capture_output=True, text=True)
-            if result.returncode != 0:
-                st.error(f"Failed to install Ollama: {result.stderr}")
-                return False
-            st.success("Ollama installed successfully!")
+        # Check if CUDA is available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        st.info(f"Using device: {device}")
         
-        # Check if ollama is already running
-        result = subprocess.run(['pgrep', '-f', 'ollama serve'], capture_output=True)
-        if result.returncode != 0:
-            st.info("Starting Ollama service...")
-            # Start ollama serve in background
-            subprocess.Popen(['ollama', 'serve'], 
-                           stdout=subprocess.DEVNULL, 
-                           stderr=subprocess.DEVNULL)
-            time.sleep(15)  # Wait longer for service to start
+        model_id = "meta-llama/Llama-3.2-11B-Vision-Instruct"
         
-        # Test if ollama is responsive
-        for i in range(5):
-            try:
-                result = subprocess.run(['ollama', 'list'], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    break
-                time.sleep(3)
-            except subprocess.TimeoutExpired:
-                continue
-        else:
-            st.warning("Ollama service may not be fully ready, but continuing...")
-        
-        # Check if model exists, if not pull it
-        model_exists = False
-        try:
-            result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
-            if 'llama3.2-vision:11b' in result.stdout:
-                model_exists = True
-        except:
-            pass
-            
-        if not model_exists:
-            st.info("Downloading vision model... This may take several minutes.")
-            result = subprocess.run(['ollama', 'pull', 'llama3.2-vision:11b'], 
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                st.error(f"Failed to download model: {result.stderr}")
-                return False
-            st.success("Model downloaded successfully!")
-        
-        return True
-    except Exception as e:
-        st.error(f"Error setting up Ollama: {e}")
-        st.info("You may need to install Ollama manually: https://ollama.ai/download")
-        return False
-
-def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
-    """Extract number from image using Ollama vision model"""
-    try:
-        response = ollama.chat(
-            model='llama3.2-vision:11b',
-            messages=[{
-                'role': 'user',
-                'content': 'Extract the handwritten number in meters from this image. Just return the numerical value.',
-                'images': [image_bytes]
-            }]
+        # Load model with GPU support
+        model = MllamaForConditionalGeneration.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None,
+            trust_remote_code=True
         )
         
-        content = response['message']['content']
-        st.write(f"Model output for {image_name}: {content}")
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        
+        st.success(f"✅ Llama 3.2 Vision model loaded successfully on {device}!")
+        return model, processor, device
+        
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        st.info("You may need to request access to the Llama models on Hugging Face")
+        return None, None, None
+
+def extract_number_from_image(image, image_name, model, processor, device):
+    """Extract number from image using Llama 3.2 Vision"""
+    try:
+        # Prepare the prompt
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Extract the handwritten number in meters from this image. Return only the numerical value."}
+                ]
+            }
+        ]
+        
+        # Process the input
+        input_text = processor.apply_chat_template(messages, add_generation_prompt=True)
+        inputs = processor(
+            image,
+            input_text,
+            add_special_tokens=False,
+            return_tensors="pt"
+        )
+        
+        # Move to GPU if available
+        if device == "cuda":
+            inputs = inputs.to(device)
+        
+        # Generate response
+        with torch.inference_mode():
+            output = model.generate(
+                **inputs,
+                max_new_tokens=50,
+                do_sample=False,
+                temperature=0.1,
+                pad_token_id=processor.tokenizer.eos_token_id
+            )
+        
+        # Decode the response
+        generated_text = processor.decode(output[0], skip_special_tokens=True)
+        
+        # Extract just the generated part (remove the input prompt)
+        prompt_length = len(input_text)
+        response = generated_text[prompt_length:].strip()
+        
+        st.write(f"Model response for {image_name}: {response}")
         
         # Extract number using regex
-        match = re.search(r'(\d+(?:\.\d+)?)(?:\s*m|meters)?', content.lower())
+        match = re.search(r'(\d+(?:\.\d+)?)', response)
         if match:
             return float(match.group(1))
         else:
             st.warning(f"No number found in {image_name}")
             return None
+            
     except Exception as e:
-        st.error(f"Error processing {image_name}: {e}")
+        st.error(f"Error processing {image_name}: {str(e)}")
         return None
+    finally:
+        # Clean up GPU memory
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            gc.collect()
 
 def main():
-    st.title("Fiber Length Difference Calculator")
-    st.write("Upload two images with handwritten fiber lengths to calculate the difference")
+    st.title("🔢 Fiber Length Difference Calculator")
+    st.markdown("*Powered by Llama 3.2 Vision with GPU acceleration*")
     
-    # Try to setup Ollama
-    if 'ollama_ready' not in st.session_state:
-        with st.spinner("Setting up Ollama..."):
-            st.session_state.ollama_ready = setup_ollama()
+    # Load model
+    if 'model_loaded' not in st.session_state:
+        with st.spinner("Loading Llama 3.2 Vision model... This may take a few minutes."):
+            model, processor, device = load_model()
+            if model is not None:
+                st.session_state.model = model
+                st.session_state.processor = processor
+                st.session_state.device = device
+                st.session_state.model_loaded = True
+            else:
+                st.session_state.model_loaded = False
     
-    if not st.session_state.ollama_ready:
-        st.error("⚠️ Ollama setup failed. This app requires Ollama to be installed.")
+    if not st.session_state.model_loaded:
+        st.error("❌ Model failed to load. Please check your setup.")
         st.markdown("""
-        ### Manual Setup Instructions:
-        1. Install Ollama from https://ollama.ai/download
-        2. Run: `ollama serve`
-        3. Run: `ollama pull llama3.2-vision:11b`
-        4. Restart this app
+        ### Requirements:
+        1. **GPU with sufficient VRAM** (recommended: 12GB+ for 11B model)
+        2. **Hugging Face access** to Llama models
+        3. **HF Token** in secrets: `HF_TOKEN`
         
-        **Note:** This app currently requires a local Ollama installation and may not work on cloud platforms like Streamlit Cloud.
+        ### Setup Instructions:
+        1. Request access to Llama models at: https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct
+        2. Add your HF token to Streamlit secrets
+        3. Deploy on a GPU-enabled platform
         """)
-        
-        # Show a demo interface anyway
-        st.subheader("Demo Interface (Non-functional)")
-        uploaded_files = st.file_uploader(
-            "Upload exactly 2 images with handwritten fiber lengths",
-            type=['png', 'jpg', 'jpeg'],
-            accept_multiple_files=True,
-            disabled=True
-        )
         return
     
-    st.success("✅ Ollama is ready!")
+    # GPU info
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory // 1024**3
+        st.success(f"🚀 Running on: {gpu_name} ({gpu_memory}GB VRAM)")
+    
+    st.markdown("---")
+    st.write("Upload two images with handwritten fiber lengths to calculate the difference")
     
     # File upload
     uploaded_files = st.file_uploader(
-        "Upload exactly 2 images with handwritten fiber lengths",
+        "Choose exactly 2 images",
         type=['png', 'jpg', 'jpeg'],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        help="Upload images containing handwritten numbers in meters"
     )
     
     if uploaded_files and len(uploaded_files) == 2:
-        st.success("2 images uploaded successfully!")
+        st.success("✅ 2 images uploaded successfully!")
         
         # Display uploaded images
         col1, col2 = st.columns(2)
         
-        with col1:
-            st.subheader("Image 1")
-            image1 = Image.open(uploaded_files[0])
-            st.image(image1, width=300)
+        images = []
+        for i, uploaded_file in enumerate(uploaded_files):
+            image = Image.open(uploaded_file)
+            images.append(image)
+            
+            with [col1, col2][i]:
+                st.subheader(f"Image {i+1}")
+                st.image(image, width=300)
         
-        with col2:
-            st.subheader("Image 2")
-            image2 = Image.open(uploaded_files[1])
-            st.image(image2, width=300)
-        
-        if st.button("Calculate Difference"):
-            with st.spinner("Processing images..."):
-                # Convert images to bytes
-                img1_bytes = uploaded_files[0].getvalue()
-                img2_bytes = uploaded_files[1].getvalue()
+        if st.button("🔍 Extract Numbers & Calculate Difference", type="primary"):
+            with st.spinner("Processing images with Llama 3.2 Vision..."):
+                progress_bar = st.progress(0)
                 
-                # Extract numbers
-                num1 = extract_number_from_image_bytes(img1_bytes, uploaded_files[0].name)
-                num2 = extract_number_from_image_bytes(img2_bytes, uploaded_files[1].name)
+                # Extract numbers from both images
+                results = []
+                for i, (image, uploaded_file) in enumerate(zip(images, uploaded_files)):
+                    progress_bar.progress((i + 1) * 40)
+                    num = extract_number_from_image(
+                        image, 
+                        uploaded_file.name, 
+                        st.session_state.model,
+                        st.session_state.processor,
+                        st.session_state.device
+                    )
+                    results.append(num)
                 
-                if num1 is not None and num2 is not None:
+                progress_bar.progress(100)
+                
+                if all(num is not None for num in results):
+                    num1, num2 = results
                     diff = abs(num1 - num2)
-                    st.success(f"🎯 Fiber length difference: **{diff} meters**")
+                    
+                    st.success("🎯 **Results:**")
                     
                     # Display results in columns
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.metric("Image 1", f"{num1} m")
+                        st.metric("📏 Image 1", f"{num1} m")
                     with col2:
-                        st.metric("Image 2", f"{num2} m")
+                        st.metric("📏 Image 2", f"{num2} m")
                     with col3:
-                        st.metric("Difference", f"{diff} m")
+                        st.metric("📐 Difference", f"{diff} m", delta=f"±{diff}")
+                    
+                    st.balloons()
                 else:
-                    st.error("Could not extract numbers from one or both images.")
+                    st.error("❌ Could not extract numbers from one or both images.")
+                    st.info("Make sure the numbers are clearly visible and handwritten.")
     
     elif uploaded_files and len(uploaded_files) != 2:
-        st.warning(f"Please upload exactly 2 images. You uploaded {len(uploaded_files)} image(s).")
+        st.warning(f"⚠️ Please upload exactly 2 images. You uploaded {len(uploaded_files)} image(s).")
     
     else:
-        st.info("Please upload 2 images to get started.")
+        st.info("👆 Upload 2 images above to get started!")
+        
+        # Add example section
+        with st.expander("ℹ️ How it works"):
+            st.markdown("""
+            1. **Upload** two images containing handwritten numbers
+            2. **AI Analysis** using Llama 3.2 Vision model
+            3. **Extract** numerical values from both images  
+            4. **Calculate** the absolute difference
+            
+            **Supported formats:** PNG, JPG, JPEG
+            **Best results:** Clear, well-lit handwritten numbers
+            """)
 
 if __name__ == "__main__":
     main()
