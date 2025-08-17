@@ -1,5 +1,6 @@
+ollama
 curl
 wget
 cuda
 driver
-ollama
+
