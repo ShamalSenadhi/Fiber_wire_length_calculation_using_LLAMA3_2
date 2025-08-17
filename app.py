@@ -5,6 +5,10 @@ from PIL import Image
 import io
 import base64
 
+ollama serve  # Run in separate terminal
+ollama pull llama3.2-vision:11b
+
+
 # Page configuration
 st.set_page_config(
     page_title="Fiber Length Analyzer",
