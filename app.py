@@ -1,63 +1,94 @@
 import streamlit as st
-import ollama
+import requests
+import json
+import base64
 import re
 from PIL import Image
 import io
 import subprocess
-import time
 import os
+import time
 
-# Set page config
+# Page config
 st.set_page_config(
     page_title="Fiber Length Analyzer",
     page_icon="📏",
     layout="wide"
 )
 
-@st.cache_resource
-def setup_ollama():
-    """Initialize Ollama service and pull the model"""
+def install_ollama():
+    """Install Ollama if not already installed"""
     try:
-        # Set environment variable for CUDA
-        os.environ['LD_LIBRARY_PATH'] = '/usr/lib64-nvidia'
+        # Check if ollama is already installed
+        result = subprocess.run(['ollama', '--version'], capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+    except FileNotFoundError:
+        pass
+    
+    try:
+        # Install Ollama
+        st.info("Installing Ollama... This may take a few minutes.")
+        install_cmd = "curl -fsSL https://ollama.com/install.sh | sh"
+        subprocess.run(install_cmd, shell=True, check=True)
         
         # Start Ollama service
         subprocess.Popen(['ollama', 'serve'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(5)  # Wait for service to start
         
-        # Pull the model
-        st.info("Loading AI model... This may take a few minutes on first run.")
-        result = subprocess.run(['ollama', 'pull', 'llama3.2-vision:11b'], 
-                              capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            st.success("AI model loaded successfully!")
-            return True
-        else:
-            st.error(f"Failed to load model: {result.stderr}")
-            return False
-            
+        return True
     except Exception as e:
-        st.error(f"Error setting up Ollama: {str(e)}")
+        st.error(f"Failed to install Ollama: {e}")
         return False
 
-def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
-    """Extract handwritten number from image using Ollama vision model"""
+def pull_model():
+    """Pull the vision model if not already available"""
     try:
-        response = ollama.chat(
-            model='llama3.2-vision:11b',
-            messages=[{
-                'role': 'user',
-                'content': 'Extract the handwritten number in meters from this image. Return only the numerical value.',
-                'images': [image_bytes]
-            }]
-        )
+        # Check if model exists
+        result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+        if 'llama3.2-vision:11b' in result.stdout:
+            return True
         
-        content = response['message']['content']
-        st.write(f"**AI Response for {image_name}:** {content}")
+        st.info("Downloading vision model... This may take several minutes.")
+        subprocess.run(['ollama', 'pull', 'llama3.2-vision:11b'], check=True)
+        return True
+    except Exception as e:
+        st.error(f"Failed to pull model: {e}")
+        return False
+
+def extract_number_from_image(image_bytes, image_name='uploaded_image'):
+    """Extract number from image using Ollama API"""
+    try:
+        # Convert image bytes to base64
+        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+        
+        # Prepare the request
+        url = "http://localhost:11434/api/chat"
+        payload = {
+            "model": "llama3.2-vision:11b",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Extract the handwritten number in meters from this image. Return only the numerical value.",
+                    "images": [image_b64]
+                }
+            ],
+            "stream": False
+        }
+        
+        # Make the request
+        response = requests.post(url, json=payload, timeout=60)
+        response.raise_for_status()
+        
+        # Parse response
+        result = response.json()
+        content = result['message']['content']
+        
+        st.write(f"**Raw model output for {image_name}:**")
+        st.write(content)
         
         # Extract number using regex
-        match = re.search(r'(\d+(?:\.\d+)?)(?:\s*m| meters)?', content.lower())
+        match = re.search(r'(\d+(?:\.\d+)?)', content)
         if match:
             return float(match.group(1))
         else:
@@ -65,84 +96,74 @@ def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
             return None
             
     except Exception as e:
-        st.error(f"Error processing {image_name}: {str(e)}")
+        st.error(f"Error processing {image_name}: {e}")
         return None
 
+# Main app
 def main():
-    st.title("🔬 Fiber Length Analyzer")
-    st.markdown("Upload two images with handwritten fiber lengths to calculate the difference.")
+    st.title("📏 Fiber Length Analyzer")
+    st.markdown("Upload two images of handwritten fiber lengths to calculate the difference.")
     
     # Initialize Ollama
     if 'ollama_ready' not in st.session_state:
-        st.session_state.ollama_ready = setup_ollama()
-    
-    if not st.session_state.ollama_ready:
-        st.error("Failed to initialize AI model. Please refresh the page.")
-        return
-    
-    # File upload
-    uploaded_files = st.file_uploader(
-        "Choose exactly 2 image files",
-        type=['png', 'jpg', 'jpeg'],
-        accept_multiple_files=True,
-        help="Upload images containing handwritten fiber lengths"
-    )
-    
-    if uploaded_files and len(uploaded_files) == 2:
-        col1, col2 = st.columns(2)
-        
-        results = []
-        
-        for i, uploaded_file in enumerate(uploaded_files):
-            with col1 if i == 0 else col2:
-                st.subheader(f"Image {i+1}: {uploaded_file.name}")
-                
-                # Display image
-                image = Image.open(uploaded_file)
-                image.thumbnail((300, 300))
-                st.image(image, caption=f"Uploaded: {uploaded_file.name}")
-                
-                # Process image
-                image_bytes = uploaded_file.getvalue()
-                
-                with st.spinner(f"Analyzing {uploaded_file.name}..."):
-                    number = extract_number_from_image_bytes(image_bytes, uploaded_file.name)
-                    results.append(number)
-                
-                if number is not None:
-                    st.success(f"✅ Extracted: {number} meters")
-                else:
-                    st.error("❌ Could not extract number")
-        
-        # Calculate difference
-        if all(result is not None for result in results):
-            difference = abs(results[0] - results[1])
-            
-            st.markdown("---")
-            st.subheader("📊 Results")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Image 1 Length", f"{results[0]} m")
-            with col2:
-                st.metric("Image 2 Length", f"{results[1]} m")
-            with col3:
-                st.metric("Difference", f"{difference} m", 
-                         delta=f"{difference:.2f}" if difference > 0 else "0")
-            
-            if difference > 0:
-                st.info(f"The fiber length difference is **{difference} meters**")
+        with st.spinner("Setting up Ollama..."):
+            if install_ollama() and pull_model():
+                st.session_state.ollama_ready = True
+                st.success("✅ Ollama is ready!")
             else:
-                st.success("The fiber lengths are identical!")
-        
+                st.error("❌ Failed to setup Ollama")
+                st.stop()
+    
+    # File upload section
+    st.header("Upload Images")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Image 1")
+        uploaded_file1 = st.file_uploader("Choose first image", type=['png', 'jpg', 'jpeg'], key="file1")
+        if uploaded_file1:
+            image1 = Image.open(uploaded_file1)
+            st.image(image1, caption="Image 1", width=300)
+    
+    with col2:
+        st.subheader("Image 2")
+        uploaded_file2 = st.file_uploader("Choose second image", type=['png', 'jpg', 'jpeg'], key="file2")
+        if uploaded_file2:
+            image2 = Image.open(uploaded_file2)
+            st.image(image2, caption="Image 2", width=300)
+    
+    # Process button
+    if st.button("🔍 Analyze Images", type="primary"):
+        if uploaded_file1 and uploaded_file2:
+            st.header("Analysis Results")
+            
+            with st.spinner("Extracting numbers from images..."):
+                # Reset file pointers
+                uploaded_file1.seek(0)
+                uploaded_file2.seek(0)
+                
+                # Extract numbers
+                num1 = extract_number_from_image(uploaded_file1.read(), uploaded_file1.name)
+                num2 = extract_number_from_image(uploaded_file2.read(), uploaded_file2.name)
+                
+                if num1 is not None and num2 is not None:
+                    diff = abs(num1 - num2)
+                    
+                    # Display results
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Image 1 Value", f"{num1} meters")
+                    with col2:
+                        st.metric("Image 2 Value", f"{num2} meters")
+                    with col3:
+                        st.metric("Difference", f"{diff} meters")
+                    
+                    # Success message
+                    st.success(f"✅ Fiber length difference: **{diff} meters**")
+                else:
+                    st.error("❌ Could not extract numbers from one or both images")
         else:
-            st.warning("Could not calculate difference - please ensure both images contain clear handwritten numbers")
-    
-    elif uploaded_files and len(uploaded_files) != 2:
-        st.warning(f"Please upload exactly 2 images. You uploaded {len(uploaded_files)} files.")
-    
-    else:
-        st.info("👆 Upload two images to get started")
+            st.warning("⚠️ Please upload both images before analyzing")
 
 if __name__ == "__main__":
     main()
