@@ -10,19 +10,32 @@ import time
 def setup_ollama():
     """Setup Ollama service and model"""
     try:
+        # Install Ollama if not present
+        if not os.path.exists('/usr/local/bin/ollama'):
+            st.info("Installing Ollama...")
+            subprocess.run(['curl', '-fsSL', 'https://ollama.ai/install.sh'], 
+                         stdout=subprocess.PIPE, check=True)
+            install_script = subprocess.run(['curl', '-fsSL', 'https://ollama.ai/install.sh'], 
+                                          capture_output=True, text=True, check=True)
+            subprocess.run(['sh', '-c', install_script.stdout], check=True)
+        
         # Check if ollama is already running
         result = subprocess.run(['pgrep', 'ollama'], capture_output=True)
         if result.returncode != 0:
             # Start ollama serve in background
             subprocess.Popen(['ollama', 'serve'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(5)  # Wait for service to start
+            time.sleep(10)  # Wait longer for service to start
         
         # Check if model exists, if not pull it
         try:
             ollama.show('llama3.2-vision:11b')
         except:
-            st.info("Downloading vision model... This may take a few minutes.")
-            subprocess.run(['ollama', 'pull', 'llama3.2-vision:11b'])
+            st.info("Downloading vision model... This may take several minutes.")
+            result = subprocess.run(['ollama', 'pull', 'llama3.2-vision:11b'], 
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                st.error(f"Failed to download model: {result.stderr}")
+                return False
         
         return True
     except Exception as e:
