@@ -1,97 +1,63 @@
 import streamlit as st
-import torch
-from transformers import AutoProcessor, LlavaForConditionalGeneration
-from PIL import Image
+import ollama
 import re
-import gc
+from PIL import Image
+import io
+import subprocess
+import time
+import os
+
+# Set page config
+st.set_page_config(
+    page_title="Fiber Length Analyzer",
+    page_icon="📏",
+    layout="wide"
+)
 
 @st.cache_resource
-def load_model():
-    """Load an open-source vision model with GPU support"""
+def setup_ollama():
+    """Initialize Ollama service and pull the model"""
     try:
-        # Check if CUDA is available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        st.info(f"Using device: {device}")
+        # Set environment variable for CUDA
+        os.environ['LD_LIBRARY_PATH'] = '/usr/lib64-nvidia'
         
-        # Use LLaVA model (open source, no gating)
-        model_id = "llava-hf/llava-1.5-7b-hf"
+        # Start Ollama service
+        subprocess.Popen(['ollama', 'serve'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(5)  # Wait for service to start
         
-        # Load model with GPU support
-        model = LlavaForConditionalGeneration.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            device_map="auto" if device == "cuda" else None,
-            low_cpu_mem_usage=True
+        # Pull the model
+        st.info("Loading AI model... This may take a few minutes on first run.")
+        result = subprocess.run(['ollama', 'pull', 'llama3.2-vision:11b'], 
+                              capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            st.success("AI model loaded successfully!")
+            return True
+        else:
+            st.error(f"Failed to load model: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        st.error(f"Error setting up Ollama: {str(e)}")
+        return False
+
+def extract_number_from_image_bytes(image_bytes, image_name='uploaded_image'):
+    """Extract handwritten number from image using Ollama vision model"""
+    try:
+        response = ollama.chat(
+            model='llama3.2-vision:11b',
+            messages=[{
+                'role': 'user',
+                'content': 'Extract the handwritten number in meters from this image. Return only the numerical value.',
+                'images': [image_bytes]
+            }]
         )
         
-        processor = AutoProcessor.from_pretrained(model_id)
-        
-        st.success(f"✅ LLaVA-1.5 Vision model loaded successfully on {device}!")
-        return model, processor, device
-        
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        # Fallback to smaller model
-        try:
-            st.info("Trying smaller model...")
-            model_id = "microsoft/kosmos-2-patch14-224"
-            from transformers import AutoModel
-            model = AutoModel.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map="auto" if device == "cuda" else None,
-            )
-            processor = AutoProcessor.from_pretrained(model_id)
-            st.success(f"✅ Kosmos-2 model loaded on {device}!")
-            return model, processor, device
-        except Exception as e2:
-            st.error(f"Fallback model also failed: {str(e2)}")
-            return None, None, None
-
-def extract_number_from_image_llava(image, image_name, model, processor, device):
-    """Extract number from image using LLaVA"""
-    try:
-        # Prepare the conversation
-        conversation = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": "What handwritten number do you see in this image? Just return the number value only."}
-                ]
-            }
-        ]
-        
-        # Apply chat template
-        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-        
-        # Process inputs
-        inputs = processor(images=image, text=prompt, return_tensors="pt")
-        
-        # Move to GPU if available
-        if device == "cuda":
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        # Generate response
-        with torch.inference_mode():
-            generate_ids = model.generate(
-                **inputs, 
-                max_new_tokens=30,
-                do_sample=False,
-                temperature=0.1
-            )
-        
-        # Decode response
-        response = processor.batch_decode(
-            generate_ids[:, inputs['input_ids'].shape[1]:], 
-            skip_special_tokens=True, 
-            clean_up_tokenization_spaces=False
-        )[0]
-        
-        st.write(f"Model response for {image_name}: {response}")
+        content = response['message']['content']
+        st.write(f"**AI Response for {image_name}:** {content}")
         
         # Extract number using regex
-        match = re.search(r'(\d+(?:\.\d+)?)', response)
+        match = re.search(r'(\d+(?:\.\d+)?)(?:\s*m| meters)?', content.lower())
         if match:
             return float(match.group(1))
         else:
@@ -101,172 +67,82 @@ def extract_number_from_image_llava(image, image_name, model, processor, device)
     except Exception as e:
         st.error(f"Error processing {image_name}: {str(e)}")
         return None
-    finally:
-        # Clean up GPU memory
-        if device == "cuda":
-            torch.cuda.empty_cache()
-            gc.collect()
-
-def extract_number_simple_ocr(image, image_name):
-    """Fallback OCR method using easyocr"""
-    try:
-        import easyocr
-        reader = easyocr.Reader(['en'])
-        
-        # Convert PIL to numpy array
-        import numpy as np
-        img_array = np.array(image)
-        
-        # Extract text
-        results = reader.readtext(img_array)
-        
-        # Look for numbers
-        for (bbox, text, confidence) in results:
-            if confidence > 0.5:  # Only high confidence results
-                match = re.search(r'(\d+(?:\.\d+)?)', text)
-                if match:
-                    number = float(match.group(1))
-                    st.write(f"OCR found in {image_name}: {text} (confidence: {confidence:.2f})")
-                    return number
-        
-        st.warning(f"No numbers found via OCR in {image_name}")
-        return None
-        
-    except ImportError:
-        st.error("EasyOCR not available. Install with: pip install easyocr")
-        return None
-    except Exception as e:
-        st.error(f"OCR error for {image_name}: {str(e)}")
-        return None
 
 def main():
-    st.title("🔢 Fiber Length Difference Calculator")
-    st.markdown("*Powered by Open-Source Vision AI*")
+    st.title("🔬 Fiber Length Analyzer")
+    st.markdown("Upload two images with handwritten fiber lengths to calculate the difference.")
     
-    # Model selection
-    method = st.radio(
-        "Choose processing method:",
-        ["Vision AI (LLaVA)", "OCR (EasyOCR)"],
-        help="Vision AI is more accurate but requires more resources. OCR is faster but may be less accurate."
-    )
+    # Initialize Ollama
+    if 'ollama_ready' not in st.session_state:
+        st.session_state.ollama_ready = setup_ollama()
     
-    # Load model only if using Vision AI
-    if method == "Vision AI (LLaVA)":
-        if 'model_loaded' not in st.session_state:
-            with st.spinner("Loading LLaVA Vision model... This may take a few minutes."):
-                model, processor, device = load_model()
-                if model is not None:
-                    st.session_state.model = model
-                    st.session_state.processor = processor
-                    st.session_state.device = device
-                    st.session_state.model_loaded = True
-                else:
-                    st.session_state.model_loaded = False
-        
-        if not st.session_state.model_loaded:
-            st.error("❌ Vision model failed to load.")
-            method = "OCR (EasyOCR)"  # Fallback
-            st.info("Falling back to OCR method...")
-    
-    # GPU info
-    if torch.cuda.is_available() and method == "Vision AI (LLaVA)":
-        gpu_name = torch.cuda.get_device_name(0)
-        gpu_memory = torch.cuda.get_device_properties(0).total_memory // 1024**3
-        st.success(f"🚀 Running on: {gpu_name} ({gpu_memory}GB VRAM)")
-    elif method == "Vision AI (LLaVA)":
-        st.info("🖥️ Running on CPU (slower but works)")
-    
-    st.markdown("---")
-    st.write("Upload two images with handwritten fiber lengths to calculate the difference")
+    if not st.session_state.ollama_ready:
+        st.error("Failed to initialize AI model. Please refresh the page.")
+        return
     
     # File upload
     uploaded_files = st.file_uploader(
-        "Choose exactly 2 images",
+        "Choose exactly 2 image files",
         type=['png', 'jpg', 'jpeg'],
         accept_multiple_files=True,
-        help="Upload images containing handwritten numbers in meters"
+        help="Upload images containing handwritten fiber lengths"
     )
     
     if uploaded_files and len(uploaded_files) == 2:
-        st.success("✅ 2 images uploaded successfully!")
-        
-        # Display uploaded images
         col1, col2 = st.columns(2)
         
-        images = []
-        for i, uploaded_file in enumerate(uploaded_files):
-            image = Image.open(uploaded_file)
-            images.append(image)
-            
-            with [col1, col2][i]:
-                st.subheader(f"Image {i+1}")
-                st.image(image, width=300)
+        results = []
         
-        if st.button(f"🔍 Extract Numbers using {method}", type="primary"):
-            with st.spinner(f"Processing images with {method}..."):
-                progress_bar = st.progress(0)
+        for i, uploaded_file in enumerate(uploaded_files):
+            with col1 if i == 0 else col2:
+                st.subheader(f"Image {i+1}: {uploaded_file.name}")
                 
-                # Extract numbers from both images
-                results = []
-                for i, (image, uploaded_file) in enumerate(zip(images, uploaded_files)):
-                    progress_bar.progress((i + 1) * 40)
-                    
-                    if method == "Vision AI (LLaVA)" and st.session_state.get('model_loaded'):
-                        num = extract_number_from_image_llava(
-                            image, 
-                            uploaded_file.name, 
-                            st.session_state.model,
-                            st.session_state.processor,
-                            st.session_state.device
-                        )
-                    else:
-                        num = extract_number_simple_ocr(image, uploaded_file.name)
-                    
-                    results.append(num)
+                # Display image
+                image = Image.open(uploaded_file)
+                image.thumbnail((300, 300))
+                st.image(image, caption=f"Uploaded: {uploaded_file.name}")
                 
-                progress_bar.progress(100)
+                # Process image
+                image_bytes = uploaded_file.getvalue()
                 
-                if all(num is not None for num in results):
-                    num1, num2 = results
-                    diff = abs(num1 - num2)
-                    
-                    st.success("🎯 **Results:**")
-                    
-                    # Display results in columns
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("📏 Image 1", f"{num1} m")
-                    with col2:
-                        st.metric("📏 Image 2", f"{num2} m")
-                    with col3:
-                        st.metric("📐 Difference", f"{diff} m", delta=f"±{diff}")
-                    
-                    st.balloons()
+                with st.spinner(f"Analyzing {uploaded_file.name}..."):
+                    number = extract_number_from_image_bytes(image_bytes, uploaded_file.name)
+                    results.append(number)
+                
+                if number is not None:
+                    st.success(f"✅ Extracted: {number} meters")
                 else:
-                    st.error("❌ Could not extract numbers from one or both images.")
-                    st.info("Try the other processing method or ensure numbers are clearly visible.")
+                    st.error("❌ Could not extract number")
+        
+        # Calculate difference
+        if all(result is not None for result in results):
+            difference = abs(results[0] - results[1])
+            
+            st.markdown("---")
+            st.subheader("📊 Results")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Image 1 Length", f"{results[0]} m")
+            with col2:
+                st.metric("Image 2 Length", f"{results[1]} m")
+            with col3:
+                st.metric("Difference", f"{difference} m", 
+                         delta=f"{difference:.2f}" if difference > 0 else "0")
+            
+            if difference > 0:
+                st.info(f"The fiber length difference is **{difference} meters**")
+            else:
+                st.success("The fiber lengths are identical!")
+        
+        else:
+            st.warning("Could not calculate difference - please ensure both images contain clear handwritten numbers")
     
     elif uploaded_files and len(uploaded_files) != 2:
-        st.warning(f"⚠️ Please upload exactly 2 images. You uploaded {len(uploaded_files)} image(s).")
+        st.warning(f"Please upload exactly 2 images. You uploaded {len(uploaded_files)} files.")
     
     else:
-        st.info("👆 Upload 2 images above to get started!")
-        
-        # Add example section
-        with st.expander("ℹ️ How it works"):
-            st.markdown("""
-            **Vision AI Mode:**
-            - Uses LLaVA-1.5 model (7B parameters)
-            - Better understanding of context
-            - Works with GPU acceleration
-            
-            **OCR Mode:**  
-            - Uses EasyOCR for text detection
-            - Faster processing
-            - Good for clear text
-            
-            **Best results:** Clear, well-lit handwritten numbers
-            """)
+        st.info("👆 Upload two images to get started")
 
 if __name__ == "__main__":
     main()
