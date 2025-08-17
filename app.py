@@ -3,11 +3,11 @@ Fiber Wire Length Calculation using LLAMA3.2-Vision
 Advanced AI-Based Measurement System for Telecommunications Infrastructure
 
 Author: Fiber Analytics Team
-Version: 2.0.0
+Version: 2.1.0
 License: MIT
 """
+
 import streamlit as st
-import ollama
 import re
 import io
 import base64
@@ -25,11 +25,33 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 import cv2
-from streamlit_option_menu import option_menu
-from streamlit_lottie import st_lottie
-import requests
-from fpdf import FPDF
-from io import BytesIO
+
+# Safe imports with fallbacks
+try:
+    import ollama
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    st.error("⚠️ Ollama not available. Please install ollama to use AI features.")
+
+try:
+    from streamlit_option_menu import option_menu
+    OPTION_MENU_AVAILABLE = True
+except ImportError:
+    OPTION_MENU_AVAILABLE = False
+
+try:
+    from streamlit_lottie import st_lottie
+    import requests
+    LOTTIE_AVAILABLE = True
+except ImportError:
+    LOTTIE_AVAILABLE = False
+
+try:
+    from fpdf import FPDF
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -118,10 +140,6 @@ st.markdown("""
         box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
     }
     
-    .sidebar .sidebar-content {
-        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
-    }
-    
     .history-item {
         background: white;
         border-left: 4px solid #667eea;
@@ -162,6 +180,9 @@ class FiberLengthCalculator:
     
     def check_model_availability(self) -> bool:
         """Check if LLAMA3.2-Vision model is available"""
+        if not OLLAMA_AVAILABLE:
+            return False
+            
         try:
             models = ollama.list()
             available_models = [model['name'] for model in models['models']]
@@ -175,6 +196,10 @@ class FiberLengthCalculator:
     
     def setup_model(self) -> bool:
         """Setup and pull LLAMA3.2-Vision model if needed"""
+        if not OLLAMA_AVAILABLE:
+            st.error("❌ Ollama is not available. Please install Ollama first.")
+            return False
+            
         try:
             if not self.check_model_availability():
                 with st.spinner("🔄 Downloading LLAMA3.2-Vision model (this may take a while)..."):
@@ -210,7 +235,10 @@ class FiberLengthCalculator:
             return image
     
     def extract_measurement_from_image(self, image_bytes: bytes, image_name: str = "uploaded_image") -> Dict:
-        """Extract measurement from image using LLAMA3.2-Vision"""
+        """Extract measurement from image using LLAMA3.2-Vision or fallback method"""
+        if not OLLAMA_AVAILABLE:
+            return self._fallback_extraction(image_bytes, image_name)
+            
         try:
             # Enhanced prompt engineering for better results
             prompt = """
@@ -261,7 +289,8 @@ class FiberLengthCalculator:
                 'confidence': confidence,
                 'timestamp': datetime.now(),
                 'image_name': image_name,
-                'status': 'success' if extracted_value else 'failed'
+                'status': 'success' if extracted_value else 'failed',
+                'method': 'AI'
             }
             
             return result
@@ -274,8 +303,21 @@ class FiberLengthCalculator:
                 'confidence': 0.0,
                 'timestamp': datetime.now(),
                 'image_name': image_name,
-                'status': 'error'
+                'status': 'error',
+                'method': 'AI'
             }
+    
+    def _fallback_extraction(self, image_bytes: bytes, image_name: str) -> Dict:
+        """Fallback method when AI is not available"""
+        return {
+            'value': None,
+            'raw_response': "AI model not available. Manual entry required.",
+            'confidence': 0.0,
+            'timestamp': datetime.now(),
+            'image_name': image_name,
+            'status': 'manual_required',
+            'method': 'fallback'
+        }
     
     def calculate_statistics(self, measurements: List[float]) -> Dict:
         """Calculate comprehensive statistics for measurements"""
@@ -296,6 +338,10 @@ class FiberLengthCalculator:
     
     def generate_report(self, measurements: List[Dict]) -> bytes:
         """Generate PDF report of measurements"""
+        if not PDF_AVAILABLE:
+            st.warning("PDF generation not available. Install fpdf2 for PDF export.")
+            return b''
+            
         try:
             pdf = FPDF()
             pdf.add_page()
@@ -341,6 +387,9 @@ class FiberLengthCalculator:
 
 def load_lottie_url(url: str) -> Optional[Dict]:
     """Load Lottie animation from URL"""
+    if not LOTTIE_AVAILABLE:
+        return None
+        
     try:
         r = requests.get(url)
         if r.status_code != 200:
@@ -359,30 +408,50 @@ def main():
     st.markdown('<h1 class="main-header">🔬 AI Fiber Length Calculator</h1>', unsafe_allow_html=True)
     
     # Load Lottie animation (optional)
-    lottie_url = "https://assets5.lottiefiles.com/packages/lf20_V9t630.json"
-    lottie_json = load_lottie_url(lottie_url)
-    if lottie_json:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st_lottie(lottie_json, height=200)
+    if LOTTIE_AVAILABLE:
+        lottie_url = "https://assets5.lottiefiles.com/packages/lf20_V9t630.json"
+        lottie_json = load_lottie_url(lottie_url)
+        if lottie_json:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st_lottie(lottie_json, height=200)
     
     # Sidebar navigation
     with st.sidebar:
-        st.image("https://via.placeholder.com/300x100/667eea/ffffff?text=Fiber+Analytics", use_column_width=True)
+        st.markdown("### 🔬 Fiber Analytics")
         
-        selected = option_menu(
-            menu_title="Navigation",
-            options=["🏠 Home", "📊 Analytics", "⚙️ Settings", "📋 History", "❓ Help"],
-            icons=["house", "bar-chart", "gear", "clock-history", "question-circle"],
-            menu_icon="cast",
-            default_index=0,
-            styles={
-                "container": {"padding": "0!important", "background-color": "#fafafa"},
-                "icon": {"color": "orange", "font-size": "25px"},
-                "nav-link": {"font-size": "16px", "text-align": "left", "margin": "0px"},
-                "nav-link-selected": {"background-color": "#667eea"},
-            }
-        )
+        if OPTION_MENU_AVAILABLE:
+            selected = option_menu(
+                menu_title="Navigation",
+                options=["🏠 Home", "📊 Analytics", "⚙️ Settings", "📋 History", "❓ Help"],
+                icons=["house", "bar-chart", "gear", "clock-history", "question-circle"],
+                menu_icon="cast",
+                default_index=0,
+                styles={
+                    "container": {"padding": "0!important", "background-color": "#fafafa"},
+                    "icon": {"color": "orange", "font-size": "25px"},
+                    "nav-link": {"font-size": "16px", "text-align": "left", "margin": "0px"},
+                    "nav-link-selected": {"background-color": "#667eea"},
+                }
+            )
+        else:
+            # Fallback navigation
+            selected = st.selectbox(
+                "Navigation",
+                ["🏠 Home", "📊 Analytics", "⚙️ Settings", "📋 History", "❓ Help"]
+            )
+        
+        # System status
+        st.markdown("### 🔧 System Status")
+        if OLLAMA_AVAILABLE:
+            st.success("✅ Ollama Available")
+        else:
+            st.error("❌ Ollama Not Available")
+            
+        if PDF_AVAILABLE:
+            st.success("✅ PDF Export Available")
+        else:
+            st.warning("⚠️ PDF Export Unavailable")
     
     # Main content area
     if selected == "🏠 Home":
@@ -402,18 +471,19 @@ def render_home_page(calculator: FiberLengthCalculator):
     # Model status check
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        model_available = calculator.check_model_availability()
-        
-        if model_available:
-            st.markdown('<div class="status-success">✅ LLAMA3.2-Vision Model Ready</div>', unsafe_allow_html=True)
+        if OLLAMA_AVAILABLE:
+            model_available = calculator.check_model_availability()
+            
+            if model_available:
+                st.markdown('<div class="status-success">✅ LLAMA3.2-Vision Model Ready</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="status-warning">⚠️ Model Not Available</div>', unsafe_allow_html=True)
+                if st.button("🔄 Setup Model"):
+                    calculator.setup_model()
+                    st.rerun()
         else:
-            st.markdown('<div class="status-warning">⚠️ Model Not Available</div>', unsafe_allow_html=True)
-            if st.button("🔄 Setup Model"):
-                calculator.setup_model()
-                st.rerun()
-    
-    if not model_available:
-        st.stop()
+            st.markdown('<div class="status-error">❌ Ollama Not Available - Manual Entry Mode</div>', unsafe_allow_html=True)
+            st.info("Install Ollama to enable AI-powered extraction. Manual entry is available below.")
     
     # Main processing section
     st.markdown("## 📸 Upload Fiber Cable Images")
@@ -438,6 +508,41 @@ def render_home_page(calculator: FiberLengthCalculator):
         
         if st.button("🚀 Process Images", type="primary"):
             process_images(calculator, uploaded_files, batch_process, auto_preprocess, show_raw_output)
+    
+    # Manual entry section when AI is not available
+    if not OLLAMA_AVAILABLE or st.session_state.model_status != "available":
+        st.markdown("## ✍️ Manual Entry")
+        st.info("Enter measurements manually when AI processing is not available.")
+        
+        with st.form("manual_entry"):
+            col1, col2 = st.columns(2)
+            with col1:
+                manual_value = st.number_input("Measurement Value (meters)", min_value=0.0, step=0.1)
+                image_name = st.text_input("Image/Cable Identifier", "manual_entry")
+            
+            with col2:
+                confidence = st.slider("Confidence Level", 0.0, 1.0, 0.9, 0.1)
+                notes = st.text_area("Notes")
+            
+            if st.form_submit_button("📝 Add Manual Entry"):
+                result = {
+                    'value': manual_value,
+                    'raw_response': f"Manual entry: {notes}",
+                    'confidence': confidence,
+                    'timestamp': datetime.now(),
+                    'image_name': image_name,
+                    'status': 'success',
+                    'method': 'manual'
+                }
+                
+                st.session_state.measurements.append(result)
+                st.session_state.processing_history.append({
+                    'timestamp': datetime.now(),
+                    'file_name': image_name,
+                    'result': result
+                })
+                
+                st.success(f"✅ Manual entry added: {manual_value}m")
 
 def process_images(calculator: FiberLengthCalculator, uploaded_files, batch_process, auto_preprocess, show_raw_output):
     """Process uploaded images and extract measurements"""
@@ -482,7 +587,8 @@ def process_images(calculator: FiberLengthCalculator, uploaded_files, batch_proc
                 'confidence': 0.0,
                 'timestamp': datetime.now(),
                 'image_name': uploaded_file.name,
-                'status': 'error'
+                'status': 'error',
+                'method': 'error'
             })
     
     progress_bar.progress(1.0)
@@ -498,6 +604,7 @@ def display_results(results: List[Dict], uploaded_files, show_raw_output: bool):
     
     # Summary metrics
     successful_results = [r for r in results if r['status'] == 'success' and r['value']]
+    manual_required = [r for r in results if r['status'] == 'manual_required']
     success_rate = len(successful_results) / len(results) if results else 0
     
     col1, col2, col3, col4 = st.columns(4)
@@ -537,6 +644,32 @@ def display_results(results: List[Dict], uploaded_files, show_raw_output: bool):
             </div>
             """, unsafe_allow_html=True)
     
+    # Handle manual entry required cases
+    if manual_required:
+        st.warning(f"⚠️ {len(manual_required)} images require manual measurement entry.")
+        
+        for i, result in enumerate(manual_required):
+            with st.expander(f"📝 Manual Entry Required: {result['image_name']}"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    manual_value = st.number_input(
+                        f"Measurement for {result['image_name']} (meters)",
+                        min_value=0.0,
+                        step=0.1,
+                        key=f"manual_{i}"
+                    )
+                
+                with col2:
+                    if st.button(f"✅ Save", key=f"save_{i}"):
+                        # Update the result
+                        result['value'] = manual_value
+                        result['status'] = 'success'
+                        result['method'] = 'manual'
+                        result['confidence'] = 0.9
+                        st.success(f"✅ Saved: {manual_value}m")
+                        st.rerun()
+    
     # Detailed results table
     st.markdown("### 📋 Detailed Results")
     
@@ -545,7 +678,9 @@ def display_results(results: List[Dict], uploaded_files, show_raw_output: bool):
             'Image': r['image_name'],
             'Measurement (m)': f"{r['value']:.2f}" if r['value'] else "N/A",
             'Confidence': f"{r['confidence']:.1%}",
-            'Status': "✅ Success" if r['status'] == 'success' else "❌ Failed",
+            'Method': r.get('method', 'AI'),
+            'Status': "✅ Success" if r['status'] == 'success' else 
+                     "✍️ Manual Required" if r['status'] == 'manual_required' else "❌ Failed",
             'Timestamp': r['timestamp'].strftime("%H:%M:%S")
         }
         for r in results
@@ -563,15 +698,18 @@ def display_results(results: List[Dict], uploaded_files, show_raw_output: bool):
             
             if result['value']:
                 st.success(f"📏 {result['value']:.2f}m (Confidence: {result['confidence']:.1%})")
+            elif result['status'] == 'manual_required':
+                st.warning("✍️ Manual entry required")
             else:
                 st.error("❌ No measurement detected")
             
-            if show_raw_output:
+            if show_raw_output and result.get('raw_response'):
                 with st.expander("🤖 AI Response"):
                     st.text(result['raw_response'])
     
     # Export options
-    if successful_results:
+    successful_for_export = [r for r in results if r.get('value')]
+    if successful_for_export:
         st.markdown("### 📥 Export Options")
         
         col1, col2, col3 = st.columns(3)
@@ -599,7 +737,7 @@ def display_results(results: List[Dict], uploaded_files, show_raw_output: bool):
         
         with col3:
             if st.button("📈 Create Visualization"):
-                create_measurement_visualization(successful_results)
+                create_measurement_visualization(successful_for_export)
 
 def create_measurement_visualization(results: List[Dict]):
     """Create interactive visualization of measurements"""
@@ -607,24 +745,30 @@ def create_measurement_visualization(results: List[Dict]):
     values = [r['value'] for r in results]
     names = [r['image_name'] for r in results]
     confidences = [r['confidence'] for r in results]
+    methods = [r.get('method', 'AI') for r in results]
     
     # Create subplots
     fig = make_subplots(
         rows=2, cols=2,
-        subplot_titles=('Measurements by Image', 'Confidence Distribution', 'Measurement Distribution', 'Summary Statistics'),
+        subplot_titles=('Measurements by Image', 'Confidence Distribution', 
+                       'Measurement Distribution', 'Processing Methods'),
         specs=[[{"type": "bar"}, {"type": "scatter"}],
-               [{"type": "histogram"}, {"type": "indicator"}]]
+               [{"type": "histogram"}, {"type": "pie"}]]
     )
     
     # Bar chart of measurements
+    colors = ['#667eea' if m == 'AI' else '#764ba2' if m == 'manual' else '#ff9800' 
+              for m in methods]
+    
     fig.add_trace(
-        go.Bar(x=names, y=values, name="Measurements", marker_color='rgb(102, 126, 234)'),
+        go.Bar(x=names, y=values, name="Measurements", marker_color=colors),
         row=1, col=1
     )
     
     # Confidence scatter plot
     fig.add_trace(
-        go.Scatter(x=names, y=confidences, mode='markers+lines', name="Confidence", marker_color='rgb(118, 75, 162)'),
+        go.Scatter(x=names, y=confidences, mode='markers+lines', 
+                  name="Confidence", marker_color='rgb(118, 75, 162)'),
         row=1, col=2
     )
     
@@ -634,16 +778,11 @@ def create_measurement_visualization(results: List[Dict]):
         row=2, col=1
     )
     
-    # Summary indicator
+    # Processing methods pie chart
+    method_counts = pd.Series(methods).value_counts()
     fig.add_trace(
-        go.Indicator(
-            mode="gauge+number+delta",
-            value=np.mean(values),
-            delta={'reference': np.median(values)},
-            gauge={'axis': {'range': [None, max(values) * 1.2]},
-                   'bar': {'color': "rgb(102, 126, 234)"}},
-            title={'text': "Average Length (m)"}
-        ),
+        go.Pie(labels=method_counts.index, values=method_counts.values, 
+               name="Methods"),
         row=2, col=2
     )
     
@@ -692,6 +831,17 @@ def render_analytics_page(calculator: FiberLengthCalculator):
     with col4:
         st.metric("Range", f"{stats['range']:.2f}m")
     
+    # Method breakdown
+    methods = [m.get('method', 'AI') for m in successful_measurements]
+    method_counts = pd.Series(methods).value_counts()
+    
+    st.markdown("### 🔧 Processing Methods")
+    col1, col2, col3 = st.columns(3)
+    
+    for i, (method, count) in enumerate(method_counts.items()):
+        with [col1, col2, col3][i % 3]:
+            st.metric(f"{method.title()} Extractions", count)
+    
     # Time-based analysis
     st.markdown("### ⏰ Processing Timeline")
     
@@ -701,13 +851,16 @@ def render_analytics_page(calculator: FiberLengthCalculator):
         timeline_data.append({
             'timestamp': measurement['timestamp'],
             'value': measurement['value'],
-            'image_name': measurement['image_name']
+            'image_name': measurement['image_name'],
+            'method': measurement.get('method', 'AI')
         })
     
     timeline_df = pd.DataFrame(timeline_data)
-    fig = px.line(timeline_df, x='timestamp', y='value', 
-                  title='Measurements Over Time',
-                  labels={'value': 'Length (m)', 'timestamp': 'Time'})
+    fig = px.scatter(timeline_df, x='timestamp', y='value', 
+                    color='method',
+                    title='Measurements Over Time',
+                    labels={'value': 'Length (m)', 'timestamp': 'Time'},
+                    hover_data=['image_name'])
     fig.update_traces(mode='markers+lines')
     st.plotly_chart(fig, use_container_width=True)
     
@@ -723,14 +876,19 @@ def render_settings_page(calculator: FiberLengthCalculator):
     
     col1, col2 = st.columns(2)
     with col1:
-        current_model = st.selectbox(
-            "Select Model",
-            ["llama3.2-vision:11b", "llama3.2-vision:7b", "llama3.1:latest"],
-            index=0
-        )
-        
+        if OLLAMA_AVAILABLE:
+            current_model = st.selectbox(
+                "Select Model",
+                ["llama3.2-vision:11b", "llama3.2-vision:7b", "llama3.1:latest"],
+                index=0,
+                help="Choose the AI model for image processing"
+            )
+            calculator.model_name = current_model
+        else:
+            st.error("❌ Ollama not available - AI features disabled")
+            
     with col2:
-        if st.button("🔄 Refresh Model Status"):
+        if OLLAMA_AVAILABLE and st.button("🔄 Refresh Model Status"):
             calculator.check_model_availability()
             st.rerun()
     
@@ -740,15 +898,19 @@ def render_settings_page(calculator: FiberLengthCalculator):
     col1, col2 = st.columns(2)
     with col1:
         confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 
-                                       st.session_state.settings.get('confidence_threshold', 0.5), 0.1)
+                                       st.session_state.settings.get('confidence_threshold', 0.5), 0.1,
+                                       help="Minimum confidence level for accepting AI extractions")
         auto_enhance = st.checkbox("Auto Image Enhancement", 
-                                 value=st.session_state.settings.get('auto_enhance', True))
+                                 value=st.session_state.settings.get('auto_enhance', True),
+                                 help="Automatically enhance image quality before processing")
     
     with col2:
         max_file_size = st.number_input("Max File Size (MB)", 1, 50, 
-                                       st.session_state.settings.get('max_file_size', 10))
+                                       st.session_state.settings.get('max_file_size', 10),
+                                       help="Maximum allowed file size for uploaded images")
         batch_size = st.number_input("Batch Processing Size", 1, 20, 
-                                   st.session_state.settings.get('batch_size', 5))
+                                   st.session_state.settings.get('batch_size', 5),
+                                   help="Number of images to process simultaneously")
     
     # Export settings
     st.markdown("### 📥 Export Configuration")
@@ -789,7 +951,7 @@ def render_settings_page(calculator: FiberLengthCalculator):
     # Save settings
     if st.button("💾 Save Settings"):
         settings = {
-            'model': current_model,
+            'model': current_model if OLLAMA_AVAILABLE else None,
             'confidence_threshold': confidence_threshold,
             'auto_enhance': auto_enhance,
             'max_file_size': max_file_size,
@@ -853,6 +1015,17 @@ def render_history_page(calculator: FiberLengthCalculator):
             days_since = (datetime.now() - latest['timestamp']).days
             st.metric("Days Since Last Use", days_since)
     
+    # Processing method breakdown
+    methods = [h['result'].get('method', 'AI') for h in history if h['result']['status'] == 'success']
+    if methods:
+        method_counts = pd.Series(methods).value_counts()
+        st.markdown("### 🔧 Processing Methods Used")
+        
+        cols = st.columns(len(method_counts))
+        for i, (method, count) in enumerate(method_counts.items()):
+            with cols[i]:
+                st.metric(f"{method.title()} Processing", count)
+    
     # Filter options
     st.markdown("### 🔍 Filter History")
     
@@ -863,7 +1036,7 @@ def render_history_page(calculator: FiberLengthCalculator):
     
     with col2:
         status_filter = st.selectbox("Filter by Status", 
-                                   ["All", "Success", "Failed", "Error"])
+                                   ["All", "Success", "Failed", "Error", "Manual Required"])
     
     with col3:
         search_term = st.text_input("Search by Filename", "")
@@ -876,7 +1049,8 @@ def render_history_page(calculator: FiberLengthCalculator):
                           if h['timestamp'].date() == date_filter]
     
     if status_filter != "All":
-        status_map = {"Success": "success", "Failed": "failed", "Error": "error"}
+        status_map = {"Success": "success", "Failed": "failed", 
+                     "Error": "error", "Manual Required": "manual_required"}
         filtered_history = [h for h in filtered_history 
                           if h['result']['status'] == status_map[status_filter]]
     
@@ -897,11 +1071,21 @@ def render_history_page(calculator: FiberLengthCalculator):
         filename = record['file_name']
         result = record['result']
         
-        status_color = {
+        status_colors = {
             'success': '#4CAF50',
             'failed': '#FF9800', 
-            'error': '#F44336'
-        }.get(result['status'], '#757575')
+            'error': '#F44336',
+            'manual_required': '#2196F3'
+        }
+        status_color = status_colors.get(result['status'], '#757575')
+        
+        status_labels = {
+            'success': '✅ Success',
+            'failed': '⚠️ Failed',
+            'error': '❌ Error',
+            'manual_required': '✍️ Manual Required'
+        }
+        status_label = status_labels.get(result['status'], result['status'].title())
         
         with st.expander(f"📄 {filename} - {timestamp.strftime('%Y-%m-%d %H:%M:%S')}", 
                         expanded=False):
@@ -909,10 +1093,11 @@ def render_history_page(calculator: FiberLengthCalculator):
             col1, col2 = st.columns(2)
             
             with col1:
-                st.markdown(f"**Status:** <span style='color: {status_color}'>{result['status'].title()}</span>", 
+                st.markdown(f"**Status:** <span style='color: {status_color}'>{status_label}</span>", 
                           unsafe_allow_html=True)
                 st.markdown(f"**Filename:** {filename}")
                 st.markdown(f"**Timestamp:** {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                st.markdown(f"**Processing Method:** {result.get('method', 'AI').title()}")
             
             with col2:
                 if result['value']:
@@ -941,6 +1126,7 @@ def render_history_page(calculator: FiberLengthCalculator):
                     'Status': h['result']['status'],
                     'Value': h['result']['value'] if h['result']['value'] else 'N/A',
                     'Confidence': f"{h['result']['confidence']:.1%}",
+                    'Method': h['result'].get('method', 'AI'),
                     'AI_Response': h['result']['raw_response']
                 }
                 for h in filtered_history
@@ -968,7 +1154,8 @@ def render_history_page(calculator: FiberLengthCalculator):
             backup_data = {
                 'history': st.session_state.processing_history,
                 'measurements': st.session_state.measurements,
-                'backup_timestamp': datetime.now().isoformat()
+                'backup_timestamp': datetime.now().isoformat(),
+                'version': '2.1.0'
             }
             
             backup_json = json.dumps(backup_data, default=str, indent=2)
@@ -983,6 +1170,29 @@ def render_help_page():
     """Render help and documentation page"""
     st.markdown("## ❓ Help & Documentation")
     
+    # System status
+    st.markdown("### 🔧 System Status")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if OLLAMA_AVAILABLE:
+            st.success("✅ Ollama Available")
+        else:
+            st.error("❌ Ollama Not Available")
+    
+    with col2:
+        if PDF_AVAILABLE:
+            st.success("✅ PDF Export Available")
+        else:
+            st.warning("⚠️ PDF Export Limited")
+    
+    with col3:
+        if OPTION_MENU_AVAILABLE:
+            st.success("✅ Enhanced UI Available")
+        else:
+            st.info("ℹ️ Basic UI Active")
+    
     # Quick start guide
     st.markdown("### 🚀 Quick Start Guide")
     
@@ -990,191 +1200,192 @@ def render_help_page():
         st.markdown("""
         **Welcome to the AI Fiber Length Calculator!**
         
-        This application uses advanced AI (LLAMA3.2-Vision) to automatically extract fiber optic cable length measurements from images.
+        This application uses advanced AI (LLAMA3.2-Vision) to automatically extract fiber optic cable 
+        length measurements from images. When AI is not available, manual entry mode is enabled.
         
-        **Prerequisites:**
-        - Ollama installed on your system
-        - LLAMA3.2-Vision model (automatically downloaded if needed)
+        **System Requirements:**
+        - Ollama installed (optional, for AI features)
+        - LLAMA3.2-Vision model (automatically downloaded if Ollama available)
         - Clear images showing fiber cable measurements
+        
+        **Deployment Notes:**
+        - The app works with or without AI capabilities
+        - Manual entry is always available as fallback
+        - All core features function without external dependencies
         """)
     
-    with st.expander("2. Uploading Images"):
+    with st.expander("2. Processing Methods"):
         st.markdown("""
-        **Supported Formats:** PNG, JPG, JPEG, BMP, TIFF
+        **AI Processing (when available):**
+        - Automatic measurement extraction from images
+        - Confidence scoring for reliability assessment
+        - Support for various image formats and qualities
         
-        **Best Practices for Images:**
-        - Ensure good lighting and clear visibility of measurements
-        - Include measurement labels or markings in the image
-        - Avoid blurry or low-resolution images
-        - Make sure measurement text is readable
-        - Include units when possible (m, meters, mt, etc.)
+        **Manual Processing:**
+        - Direct entry of measurements
+        - Custom confidence levels
+        - Notes and annotations support
+        
+        **Hybrid Approach:**
+        - AI processing with manual verification
+        - Manual correction of AI results
+        - Batch processing with selective manual input
         """)
     
-    with st.expander("3. Processing Options"):
+    with st.expander("3. Best Practices"):
         st.markdown("""
-        **Batch Processing:** Process multiple images at once
+        **For AI Processing:**
+        - Use high-contrast, clear images
+        - Ensure measurement text is readable
+        - Include units when possible (m, meters, mt)
+        - Good lighting improves accuracy
         
-        **Auto Image Enhancement:** Automatically improve image quality:
-        - Contrast enhancement
-        - Sharpness adjustment
-        - Noise reduction
+        **For Manual Entry:**
+        - Double-check measurements before entry
+        - Use consistent units (meters)
+        - Add descriptive notes for reference
+        - Set appropriate confidence levels
         
-        **Show AI Response:** Display the raw AI model output for debugging
-        """)
-    
-    with st.expander("4. Understanding Results"):
-        st.markdown("""
-        **Measurement Value:** The extracted length in meters
-        
-        **Confidence Score:** How confident the AI is in the extraction (0-100%)
-        
-        **Status Indicators:**
-        - ✅ Success: Measurement successfully extracted
-        - ❌ Failed: No measurement detected
-        - ⚠️ Error: Processing error occurred
+        **General Tips:**
+        - Process images in smaller batches for better performance
+        - Regular backups preserve your work
+        - Use analytics to identify patterns in your data
         """)
     
     # Troubleshooting
     st.markdown("### 🔧 Troubleshooting")
     
-    with st.expander("Common Issues"):
+    with st.expander("Deployment Issues"):
         st.markdown("""
-        **Model Not Available:**
-        - Click "Setup Model" to download LLAMA3.2-Vision
-        - Ensure Ollama is running
-        - Check internet connection for model download
+        **Package Installation Errors:**
+        - Check packages.txt for correct package names
+        - Remove problematic packages and use fallbacks
+        - Ensure system compatibility with deployment platform
         
-        **Poor Extraction Accuracy:**
-        - Use clearer, higher-resolution images
-        - Ensure measurement text is clearly visible
-        - Try enabling auto image enhancement
-        - Adjust confidence threshold in settings
+        **Missing Dependencies:**
+        - App gracefully handles missing optional packages
+        - Core functionality works without AI components
+        - Manual entry provides complete fallback solution
         
-        **Processing Errors:**
-        - Check image file format compatibility
-        - Reduce image file size if too large
-        - Restart the application if needed
+        **Model Download Issues:**
+        - Requires stable internet connection
+        - Large model size (~11GB) needs adequate storage
+        - Consider using smaller model variants for limited resources
         """)
     
-    with st.expander("Performance Tips"):
+    with st.expander("Performance Optimization"):
         st.markdown("""
-        **Optimize Processing Speed:**
-        - Process images in smaller batches
-        - Use lower resolution images when possible
-        - Enable caching in settings
-        - Close other resource-intensive applications
+        **Speed Improvements:**
+        - Use smaller image files when possible
+        - Enable image preprocessing selectively
+        - Process in smaller batches
+        - Consider manual entry for simple measurements
         
-        **Improve Accuracy:**
-        - Use high-contrast images
-        - Ensure measurements are clearly labeled
-        - Include measurement units in images
-        - Use consistent image formats
+        **Accuracy Improvements:**
+        - Use high-quality source images
+        - Ensure proper lighting and contrast
+        - Verify AI results manually when confidence is low
+        - Use manual entry for critical measurements
         """)
     
     # Features overview
-    st.markdown("### ✨ Features Overview")
+    st.markdown("### ✨ Available Features")
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("""
-        **Core Features:**
-        - 🤖 AI-powered measurement extraction
-        - 📸 Multiple image format support
-        - 🔄 Batch processing capabilities
-        - 📊 Real-time analytics dashboard
-        - 📋 Processing history tracking
-        - 📥 Multiple export formats
+        **Core Features (Always Available):**
+        - ✅ Manual measurement entry
+        - ✅ Data visualization and analytics
+        - ✅ CSV export functionality
+        - ✅ Processing history tracking
+        - ✅ Batch data management
+        - ✅ Statistics calculation
         """)
     
     with col2:
         st.markdown("""
-        **Advanced Features:**
-        - 🎨 Automatic image enhancement
-        - 📈 Statistical analysis
-        - 📄 PDF report generation
-        - ⚙️ Customizable settings
-        - 💾 Data backup and restore
-        - 🔍 Interactive visualizations
+        **Enhanced Features (When Available):**
+        - 🤖 AI-powered extraction (with Ollama)
+        - 📄 PDF report generation (with fpdf2)
+        - 🎨 Enhanced UI navigation (with option_menu)
+        - ✨ Animated elements (with lottie)
+        - 🖼️ Advanced image processing (with OpenCV)
         """)
     
-    # API and technical info
-    st.markdown("### 🛠️ Technical Information")
+    # Installation guide
+    st.markdown("### 📦 Installation Requirements")
     
-    with st.expander("System Requirements"):
+    with st.expander("Minimal Installation"):
         st.markdown("""
-        **Minimum Requirements:**
-        - Python 3.8 or higher
-        - 8GB RAM (16GB recommended)
-        - 2GB free disk space
-        - Internet connection for model download
+        **Required packages only:**
+        ```
+        streamlit>=1.28.0
+        Pillow>=9.0.0
+        pandas>=1.5.0
+        plotly>=5.15.0
+        numpy>=1.21.0
+        ```
         
-        **Dependencies:**
-        - Streamlit
-        - Ollama
-        - Pillow (PIL)
-        - Pandas
-        - Plotly
-        - NumPy
-        - OpenCV
+        This provides all core functionality including manual entry, 
+        analytics, and basic export capabilities.
         """)
     
-    with st.expander("Model Information"):
+    with st.expander("Full Installation"):
         st.markdown("""
-        **LLAMA3.2-Vision Model:**
-        - Size: ~11GB (11B parameters)
-        - Capabilities: Image understanding and text extraction
-        - Languages: Primarily English
-        - Accuracy: ~85-95% for clear measurements
+        **Complete feature set:**
+        ```
+        # Install Ollama separately
+        curl -fsSL https://ollama.ai/install.sh | sh
         
-        **Alternative Models:**
-        - llama3.2-vision:7b (smaller, faster)
-        - Custom fine-tuned models (contact support)
-        """)
-    
-    # Contact and support
-    st.markdown("### 📞 Support & Contact")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("""
-        **📧 Email Support**
-        support@fiberanalytics.com
+        # Install Python dependencies
+        pip install -r requirements.txt
         
-        Response time: 24-48 hours
-        """)
-    
-    with col2:
-        st.markdown("""
-        **🐛 Bug Reports**
-        [GitHub Issues](https://github.com/your-repo/issues)
+        # Pull AI model
+        ollama pull llama3.2-vision:11b
+        ```
         
-        Include error logs and images
-        """)
-    
-    with col3:
-        st.markdown("""
-        **📖 Documentation**
-        [Full Documentation](https://docs.fiberanalytics.com)
-        
-        Tutorials and examples
+        This enables all features including AI processing, 
+        PDF generation, and enhanced UI components.
         """)
     
     # Version information
     st.markdown("### 📋 Version Information")
     
     version_info = {
-        "Application Version": "2.0.0",
+        "Application Version": "2.1.0",
         "Streamlit Version": st.__version__,
-        "Python Version": "3.8+",
+        "AI Model": "llama3.2-vision:11b" if OLLAMA_AVAILABLE else "Not Available",
+        "PDF Export": "Available" if PDF_AVAILABLE else "Limited",
+        "Enhanced UI": "Available" if OPTION_MENU_AVAILABLE else "Basic",
         "License": "MIT",
         "Last Updated": "2024-12-19"
     }
     
     for key, value in version_info.items():
         st.text(f"{key}: {value}")
+    
+    # Support section
+    st.markdown("### 📞 Support & Resources")
+    
+    st.markdown("""
+    **Getting Help:**
+    - 📧 Email: support@fiberanalytics.com
+    - 🐛 Issues: [GitHub Repository](https://github.com/your-repo/issues)
+    - 📖 Documentation: [Full Guide](https://docs.fiberanalytics.com)
+    
+    **Community:**
+    - 💬 Discussions: Join our community forum
+    - 🎥 Tutorials: Video guides and walkthroughs
+    - 📚 Examples: Sample datasets and use cases
+    """)
 
 # Main execution
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error(f"Application Error: {e}")
+        st.info("Please check the logs or contact support if the issue persists.")
+        logger.exception("Application startup error")
