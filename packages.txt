@@ -1,2 +1,4 @@
 curl
-sudo
+nvidia-cuda-toolkit
+nvidia-driver-535
+procps
