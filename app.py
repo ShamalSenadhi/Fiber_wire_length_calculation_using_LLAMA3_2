@@ -1,12 +1,3 @@
-"""
-Fiber Wire Length Calculation using LLAMA3.2-Vision
-Advanced AI-Based Measurement System for Telecommunications Infrastructure
-
-Author: Fiber Analytics Team
-Version: 2.0.0
-License: MIT
-"""
-
 import streamlit as st
 import ollama
 import re
