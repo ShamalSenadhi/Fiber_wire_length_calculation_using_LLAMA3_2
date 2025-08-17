@@ -1,4 +1,6 @@
-streamlit>=1.28.0
-opencv-python-headless>=4.8.0
-Pillow>=10.0.0
-numpy>=1.24.0
+curl
+libsm6
+libxext6
+libxrender-dev
+libgl1-mesa-glx
+libglib2.0-0
